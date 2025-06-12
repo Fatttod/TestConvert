@@ -6,6 +6,10 @@ import re
 import logging
 import sys
 
+# --- KONFIGURASI LOGGING ---
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    level=logging.INFO,
+                    stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 # --- FUNGSI PARSING LINK VPN (LENGKAP DENGAN VMESS, VLESS, TROJAN) ---
@@ -132,7 +136,7 @@ def process_singbox_config(vpn_link):
             logger.info(f"Successfully read template from {template_path}")
         except FileNotFoundError:
             logger.error(f"Template file not found: {template_path}")
-            return {"status": "error", "message": f"Error: Template 'singbox-template.txt' tidak ditemukan. Pastikan file ada di repositori yang sama dengan singbox_converter.py."}
+            return {"status": "error", "message": f"Error: Template 'singbox-template.txt' tidak ditemukan. Pastikan file ini ada di repositori yang sama dengan singbox_converter.py."}
         except Exception as e:
             logger.error(f"Error reading template file: {e}")
             return {"status": "error", "message": f"Error: Gagal membaca template: {e}"}
@@ -230,7 +234,7 @@ def process_singbox_config(vpn_link):
         return {
             "status": "success", 
             "message": "Konfigurasi Sing-Box baru sudah dibuat.",
-            "config_content": output_config, 
+            "config_content": new_config_content, # Ganti ini dengan new_config_content
         }
 
     except Exception as e:
@@ -248,4 +252,4 @@ if __name__ == '__main__':
     # else:
     #     print(result["message"])
     pass
-            
+    
