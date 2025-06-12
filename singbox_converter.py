@@ -85,8 +85,8 @@ def convert_link_to_singbox_outbound(link_str):
         if transport_type == "ws":
             transport_settings = {
                 "type": "ws",
-                "websocket_path": vmess_config.get("path", "/"),
-                "websocket_headers": {
+                "path": vmess_config.get("path", "/"), # Diubah menjadi 'path'
+                "headers": { # Diubah menjadi 'headers'
                     "Host": vmess_config.get("host", "")
                 }
             }
@@ -142,8 +142,8 @@ def convert_link_to_singbox_outbound(link_str):
             if transport_type == "ws":
                 transport_settings = {
                     "type": "ws",
-                    "websocket_path": params.get("path", ["/"])[0],
-                    "websocket_headers": {
+                    "path": params.get("path", ["/"])[0], # Diubah menjadi 'path'
+                    "headers": { # Diubah menjadi 'headers'
                         "Host": params.get("host", [""])[0]
                     }
                 }
@@ -202,8 +202,8 @@ def convert_link_to_singbox_outbound(link_str):
             if transport_type == "ws":
                 transport_settings = {
                     "type": "ws",
-                    "websocket_path": params.get("path", ["/"])[0],
-                    "websocket_headers": {
+                    "path": params.get("path", ["/"])[0], # Diubah menjadi 'path'
+                    "headers": { # Diubah menjadi 'headers'
                         "Host": params.get("host", [""])[0]
                     }
                 }
@@ -254,8 +254,6 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
 
         # Pisahkan outbounds yang ada di template ke dalam kategori yang berbeda
         # untuk diatur ulang posisinya sesuai permintaan user.
-        predefined_selectors = [] # Internet, Best Latency, Lock Region ID, WhatsApp, GAMESMAX, Route Port Game, Option ADs, Option P0rn
-        other_template_outbounds = [] # Outbounds lain yang tidak termasuk selector di atas
         
         # Default fixed outbounds
         direct_outbound = {"type": "direct", "tag": "direct"}
@@ -267,20 +265,11 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
         # Dan kumpulkan selector yang ingin dipertahankan di posisi awal
         existing_default_tags = ["direct", "bypass", "block", "dns-out"]
         
-        for outbound in config_data["outbounds"]:
-            tag = outbound.get("tag")
-            if tag in EXCLUDED_SELECTOR_TAGS or tag in ["Internet", "Best Latency", "Lock Region ID"]:
-                predefined_selectors.append(outbound)
-            elif tag not in existing_default_tags:
-                other_template_outbounds.append(outbound)
+        # Buat mapping dari tag ke objek outbound yang ada di template asli
+        template_outbound_map = {o["tag"]: o for o in config_data["outbounds"] if "tag" in o}
 
-        # Bangun list outbounds final sesuai urutan yang diminta user
         final_outbounds = []
 
-        # 1. Selector/URLTest yang di depan
-        # Prioritaskan selector yang ada di predefined_selectors dari template
-        # dan tambahkan jika ada yang missing dari template
-        
         # Urutan yang diinginkan: Internet, Best Latency, Lock Region ID, WhatsApp, GAMESMAX, Route Port Game, Option ADs, Option P0rn
         desired_initial_selector_tags = [
             "Internet",
@@ -293,20 +282,17 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
             "Option P0rn"
         ]
 
-        # Map tag ke objek outbound untuk akses cepat
-        temp_outbound_map = {o["tag"]: o for o in config_data["outbounds"] if "tag" in o}
-
+        # Tambahkan selector/urltest awal sesuai urutan
         for tag_name in desired_initial_selector_tags:
-            if tag_name in temp_outbound_map:
-                final_outbounds.append(temp_outbound_map[tag_name])
+            if tag_name in template_outbound_map:
+                final_outbounds.append(template_outbound_map[tag_name])
             else:
-                # Jika selector tidak ada di template, tambahkan placeholder atau default
-                # Misalnya, Best Latency dan Internet biasanya butuh daftar node VPN
+                # Jika selector tidak ada di template, tambahkan placeholder default
                 if tag_name == "Internet":
                     final_outbounds.append({
                         "tag": "Internet",
                         "type": "selector",
-                        "outbounds": ["Best Latency", "direct"] # Ini akan diupdate nanti
+                        "outbounds": [] # Ini akan diupdate nanti
                     })
                 elif tag_name == "Best Latency":
                      final_outbounds.append({
@@ -320,32 +306,35 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
                      final_outbounds.append({
                         "type": "selector",
                         "tag": "Lock Region ID",
-                        "outbounds": [] # Ini bisa diisi manual atau sesuai rule
+                        "outbounds": []
                     })
                 elif tag_name in EXCLUDED_SELECTOR_TAGS:
-                    # Untuk tag yang dikecualikan, pastikan ada placeholder jika tidak di template
                     final_outbounds.append({
                         "type": "selector",
                         "tag": tag_name,
-                        "outbounds": [] # Ini akan dipertahankan atau diisi manual
+                        "outbounds": ["direct"] # Default untuk selector yang tidak diubah
                     })
-                logger.warning(f"Selector '{tag_name}' tidak ditemukan di template. Menambahkan placeholder.")
-
+                logger.warning(f"Selector '{tag_name}' tidak ditemukan di template. Menambahkan placeholder default.")
 
         # Tambahkan akun hasil konversi
         final_outbounds.extend(converted_outbounds)
 
         # Tambahkan outbounds lain dari template yang tidak termasuk dalam kategori di atas
-        # dan belum ditambahkan
-        for o in other_template_outbounds:
-            if o not in final_outbounds: # Pastikan tidak ada duplikasi
-                final_outbounds.append(o)
+        # dan belum ditambahkan ke final_outbounds
+        # Filter outbounds yang sudah ditambahkan atau yang akan ditambahkan secara default
+        current_final_outbound_tags = {o["tag"] for o in final_outbounds if "tag" in o}
+        
+        for outbound in config_data["outbounds"]:
+            tag = outbound.get("tag")
+            if tag not in current_final_outbound_tags and tag not in existing_default_tags:
+                final_outbounds.append(outbound)
+                current_final_outbound_tags.add(tag) # Update set of added tags
 
-        # Tambahkan outbounds default di bagian paling akhir
-        if direct_outbound not in final_outbounds: final_outbounds.append(direct_outbound)
-        if bypass_outbound not in final_outbounds: final_outbounds.append(bypass_outbound)
-        if block_outbound not in final_outbounds: final_outbounds.append(block_outbound)
-        if dns_out_outbound not in final_outbounds: final_outbounds.append(dns_out_outbound)
+        # Tambahkan outbounds default di bagian paling akhir, pastikan tidak duplikat
+        if direct_outbound["tag"] not in current_final_outbound_tags: final_outbounds.append(direct_outbound)
+        if bypass_outbound["tag"] not in current_final_outbound_tags: final_outbounds.append(bypass_outbound)
+        if block_outbound["tag"] not in current_final_outbound_tags: final_outbounds.append(block_outbound)
+        if dns_out_outbound["tag"] not in current_final_outbound_tags: final_outbounds.append(dns_out_outbound)
         
         config_data["outbounds"] = final_outbounds
 
@@ -372,26 +361,39 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
                 # Buat daftar outbounds baru untuk selector ini
                 new_nested_outbounds = []
 
-                # Prioritaskan akun yang dikonversi
-                for converted_o in converted_outbounds:
-                    if converted_o["tag"] not in new_nested_outbounds:
-                        new_nested_outbounds.append(converted_o["tag"])
-                
-                # Tambahkan 'direct' dan 'bypass' jika belum ada
-                for default_tag in ["direct", "bypass"]:
-                    if default_tag not in new_nested_outbounds and default_tag in all_outbound_tags:
-                        new_nested_outbounds.append(default_tag)
-                
-                # Pertahankan outbounds lain yang relevan dari selector asli
-                # (misalnya, jika 'Internet' ingin 'Best Latency' dan 'direct', atau 'Best Latency' ingin 'direct')
-                for original_tag_in_selector in original_nested_outbounds_list:
-                    if original_tag_in_selector not in new_nested_outbounds and original_tag_in_selector in all_outbound_tags:
-                        new_nested_outbounds.append(original_tag_in_selector)
-                
-                # Tambahkan 'dns-out' jika ini adalah selector yang relevan untuk DNS (misalnya 'Internet' bisa)
-                # Logic ini bisa disesuaikan lebih lanjut jika ada kebutuhan spesifik
-                if current_selector_tag == "Internet" and "dns-out" not in new_nested_outbounds and "dns-out" in all_outbound_tags:
-                    new_nested_outbounds.append("dns-out")
+                # Untuk "Internet" dan "Best Latency", tambahkan semua akun VPN hasil konversi
+                if current_selector_tag in ["Internet", "Best Latency", "Lock Region ID"]:
+                    for converted_o in converted_outbounds:
+                        if converted_o["tag"] not in new_nested_outbounds:
+                            new_nested_outbounds.append(converted_o["tag"])
+                    
+                    # Pastikan 'direct' ada di selector "Internet" dan "Best Latency"
+                    if "direct" not in new_nested_outbounds and "direct" in all_outbound_tags:
+                        new_nested_outbounds.append("direct")
+
+                    # Untuk "Internet", pastikan "Best Latency" ada (jika ada)
+                    if current_selector_tag == "Internet" and "Best Latency" in all_outbound_tags and "Best Latency" not in new_nested_outbounds:
+                        new_nested_outbounds.insert(0, "Best Latency") # Prioritaskan Best Latency di Internet
+                    
+                    # Untuk "Internet", tambahkan "Lock Region ID" jika ada
+                    if current_selector_tag == "Internet" and "Lock Region ID" in all_outbound_tags and "Lock Region ID" not in new_nested_outbounds:
+                        new_nested_outbounds.append("Lock Region ID")
+
+                else: # Untuk selector lain yang tidak dikecualikan
+                    # Pertahankan outbounds asli dan tambahkan yang mungkin relevan
+                    for original_tag_in_selector in original_nested_outbounds_list:
+                        if original_tag_in_selector not in new_nested_outbounds and original_tag_in_selector in all_outbound_tags:
+                            new_nested_outbounds.append(original_tag_in_selector)
+                    
+                    # Tambahkan akun konversi jika memang diperlukan di selector ini (sesuai logic default)
+                    for converted_o in converted_outbounds:
+                        if converted_o["tag"] not in new_nested_outbounds:
+                            new_nested_outbounds.append(converted_o["tag"])
+
+                    # Tambahkan default tags jika belum ada di selector ini
+                    for default_tag_check in ["direct", "bypass", "block", "dns-out"]:
+                        if default_tag_check not in new_nested_outbounds and default_tag_check in all_outbound_tags:
+                            new_nested_outbounds.append(default_tag_check)
 
                 # Hanya update jika ada perubahan
                 if new_nested_outbounds != original_nested_outbounds_list:
@@ -420,4 +422,4 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
 
 if __name__ == '__main__':
     print("Mek, file ini adalah modul logika Sing-Box. Jalankan 'app.py' untuk UI-nya ya.")
-        
+
