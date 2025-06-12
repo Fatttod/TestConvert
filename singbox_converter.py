@@ -17,6 +17,18 @@ EXCLUDED_SELECTOR_TAGS = [
     "Option P0rn"
 ]
 
+# Mapping kode negara ke simbol bendera Unicode
+COUNTRY_EMOJIS = {
+    "US": "🇺🇸", "SG": "🇸🇬", "ID": "🇮🇩", "JP": "🇯🇵", "DE": "🇩🇪",
+    "FR": "🇫🇷", "UK": "🇬🇧", "CA": "🇨🇦", "AU": "🇦🇺", "NL": "🇳🇱",
+    "KR": "🇰🇷", "HK": "🇭🇰", "TW": "🇹🇼", "IN": "🇮🇳", "BR": "🇧🇷",
+    "RU": "🇷🇺", "SE": "🇸🇪", "FI": "🇫🇮", "CH": "🇨🇭", "AR": "🇦🇷",
+    # Tambahkan lebih banyak jika diperlukan
+}
+
+def get_emoji_from_country_code(code):
+    return COUNTRY_EMOJIS.get(code.upper(), "")
+
 def parse_vmess_link(vmess_link):
     """
     Parses a VMess link (assuming base64 encoded JSON config).
@@ -41,30 +53,32 @@ def parse_vmess_link(vmess_link):
         logger.error(f"Error parsing VMess link (base64/JSON issue) for {vmess_link[:50]}...: {e}")
         return None
 
-def convert_link_to_singbox_outbound(link_str):
+def convert_link_to_singbox_outbound(link_str, node_counter):
     """
     Converts a VMess, VLESS, or Trojan link string to a Sing-Box outbound configuration.
-    Currently supports: VMess (base64 JSON), VLESS (raw URL), Trojan (raw URL).
     Returns a dictionary of Sing-Box outbound config, or None if conversion fails.
+    Adds a unique and formatted tag based on country emoji, ISP, and counter.
     """
+    outbound = None
+    original_tag_name = "Node"
+    country_code = ""
+
     if link_str.startswith("vmess://"):
         vmess_config = parse_vmess_link(link_str)
         if not vmess_config:
             return None
         
-        # Mapping VMess config ke Sing-Box outbound
+        original_tag_name = vmess_config.get("ps", f"VMess_Node_{node_counter}")
         outbound = {
-            "tag": vmess_config.get("ps", "VMess_Node"), # 'ps' is the node name in VMess
+            "tag": original_tag_name, 
             "type": "vmess",
             "server": vmess_config.get("add"),
             "server_port": int(vmess_config.get("port")),
             "uuid": vmess_config.get("id"),
-            "security": vmess_config.get("scy", "auto"), # 'scy' is security/encryption method
+            "security": vmess_config.get("scy", "auto"),
             "alterId": int(vmess_config.get("aid", 0)),
             "network": vmess_config.get("net", "tcp"),
         }
-
-        # Tambahkan TLS jika 'tls' ada dan true
         if vmess_config.get("tls", "") == "tls":
             outbound["tls"] = {
                 "enabled": True,
@@ -72,58 +86,41 @@ def convert_link_to_singbox_outbound(link_str):
                 "insecure": False,
                 "disable_sni": False
             }
-            if vmess_config.get("fp"): # fingerprint
+            if vmess_config.get("fp"):
                 outbound["tls"]["utls"] = {"enabled": True, "fingerprint": vmess_config["fp"]}
             if vmess_config.get("alpn"):
                 outbound["tls"]["alpn"] = vmess_config["alpn"].split(',')
 
-
-        # Transport settings (ws, http, grpc, quic, etc.)
         transport_type = vmess_config.get("net", "tcp")
         transport_settings = {}
-
         if transport_type == "ws":
             transport_settings = {
                 "type": "ws",
-                "path": vmess_config.get("path", "/"), # Diubah menjadi 'path'
-                "headers": { # Diubah menjadi 'headers'
-                    "Host": vmess_config.get("host", "")
-                }
+                "path": vmess_config.get("path", "/"),
+                "headers": {"Host": vmess_config.get("host", "")}
             }
         elif transport_type == "grpc":
-            transport_settings = {
-                "type": "grpc",
-                "grpc_service_name": vmess_config.get("path", "")
-            }
-        # Tambahkan konfigurasi transport lainnya jika diperlukan (e.g., http, quic)
-
+            transport_settings = {"type": "grpc", "grpc_service_name": vmess_config.get("path", "")}
         if transport_settings:
             outbound["transport"] = transport_settings
-        
-        logger.debug(f"Converted VMess link to Sing-Box outbound: {outbound.get('tag')}")
-        return outbound
     
     elif link_str.startswith("vless://"):
         try:
-            # Parse VLESS link
             parsed_url = urllib.parse.urlparse(link_str)
             user_info, server_info = parsed_url.netloc.split('@')
             uuid = user_info
             server, port = server_info.split(':')
             params = urllib.parse.parse_qs(parsed_url.query)
             
-            tag = urllib.parse.unquote(parsed_url.fragment) if parsed_url.fragment else f"VLESS_Node_{server}"
-
+            original_tag_name = urllib.parse.unquote(parsed_url.fragment) if parsed_url.fragment else f"VLESS_Node_{server}"
             outbound = {
-                "tag": tag,
+                "tag": original_tag_name,
                 "type": "vless",
                 "server": server,
                 "server_port": int(port),
                 "uuid": uuid,
                 "network": params.get("type", ["tcp"])[0],
             }
-
-            # TLS settings
             if "security" in params and params["security"][0] == "tls":
                 outbound["tls"] = {
                     "enabled": True,
@@ -131,58 +128,42 @@ def convert_link_to_singbox_outbound(link_str):
                     "insecure": False,
                     "disable_sni": False
                 }
-                if params.get("fp"): # fingerprint
+                if params.get("fp"):
                     outbound["tls"]["utls"] = {"enabled": True, "fingerprint": params["fp"][0]}
                 if params.get("alpn"):
                     outbound["tls"]["alpn"] = params["alpn"][0].split(',')
 
-            # Transport settings
             transport_type = params.get("type", ["tcp"])[0]
             transport_settings = {}
             if transport_type == "ws":
                 transport_settings = {
                     "type": "ws",
-                    "path": params.get("path", ["/"])[0], # Diubah menjadi 'path'
-                    "headers": { # Diubah menjadi 'headers'
-                        "Host": params.get("host", [""])[0]
-                    }
+                    "path": params.get("path", ["/"])[0],
+                    "headers": {"Host": params.get("host", [""])[0]}
                 }
             elif transport_type == "grpc":
-                transport_settings = {
-                    "type": "grpc",
-                    "grpc_service_name": params.get("serviceName", [""])[0]
-                }
-            # Tambahkan konfigurasi transport lainnya jika diperlukan
-
+                transport_settings = {"type": "grpc", "grpc_service_name": params.get("serviceName", [""])[0]}
             if transport_settings:
                 outbound["transport"] = transport_settings
-
-            logger.debug(f"Converted VLESS link to Sing-Box outbound: {outbound.get('tag')}")
-            return outbound
         except Exception as e:
             logger.error(f"Error parsing VLESS link for {link_str[:50]}...: {e}")
             return None
     
     elif link_str.startswith("trojan://"):
         try:
-            # Parse Trojan link
-            # Format: trojan://password@server:port?param=value#tag
             parsed_url = urllib.parse.urlparse(link_str)
             password = parsed_url.username
             server, port = parsed_url.netloc.split('@')[1].split(':') if '@' in parsed_url.netloc else parsed_url.netloc.split(':')
             params = urllib.parse.parse_qs(parsed_url.query)
             
-            tag = urllib.parse.unquote(parsed_url.fragment) if parsed_url.fragment else f"Trojan_Node_{server}"
-
+            original_tag_name = urllib.parse.unquote(parsed_url.fragment) if parsed_url.fragment else f"Trojan_Node_{server}"
             outbound = {
-                "tag": tag,
+                "tag": original_tag_name,
                 "type": "trojan",
                 "server": server,
                 "server_port": int(port),
                 "password": password,
             }
-
-            # TLS settings (Trojan usually implies TLS)
             if "security" in params and params["security"][0] == "tls" or "sni" in params:
                 outbound["tls"] = {
                     "enabled": True,
@@ -190,35 +171,23 @@ def convert_link_to_singbox_outbound(link_str):
                     "insecure": False,
                     "disable_sni": False
                 }
-                if params.get("fp"): # fingerprint
+                if params.get("fp"):
                     outbound["tls"]["utls"] = {"enabled": True, "fingerprint": params["fp"][0]}
                 if params.get("alpn"):
                     outbound["tls"]["alpn"] = params["alpn"][0].split(',')
 
-
-            # Transport settings
             transport_type = params.get("type", ["tcp"])[0]
             transport_settings = {}
             if transport_type == "ws":
                 transport_settings = {
                     "type": "ws",
-                    "path": params.get("path", ["/"])[0], # Diubah menjadi 'path'
-                    "headers": { # Diubah menjadi 'headers'
-                        "Host": params.get("host", [""])[0]
-                    }
+                    "path": params.get("path", ["/"])[0],
+                    "headers": {"Host": params.get("host", [""])[0]}
                 }
             elif transport_type == "grpc":
-                transport_settings = {
-                    "type": "grpc",
-                    "grpc_service_name": params.get("serviceName", [""])[0]
-                }
-            # Tambahkan konfigurasi transport lainnya jika diperlukan
-
+                transport_settings = {"type": "grpc", "grpc_service_name": params.get("serviceName", [""])[0]}
             if transport_settings:
                 outbound["transport"] = transport_settings
-            
-            logger.debug(f"Converted Trojan link to Sing-Box outbound: {outbound.get('tag')}")
-            return outbound
         except Exception as e:
             logger.error(f"Error parsing Trojan link for {link_str[:50]}...: {e}")
             return None
@@ -226,6 +195,33 @@ def convert_link_to_singbox_outbound(link_str):
     else:
         logger.warning(f"Unsupported link type for conversion: {link_str[:50]}...")
         return None
+
+    if outbound:
+        # Logika pembentukan tag baru: simbol bendera + nama ISP/nama asli + nomor urut
+        display_name = original_tag_name
+        
+        # Coba ekstrak kode negara (misal US, SG, ID) dari awal nama
+        match_country = re.match(r'^([A-Za-z]{2})\s*-\s*(.*)', display_name)
+        if match_country:
+            country_code = match_country.group(1).upper()
+            remaining_name = match_country.group(2).strip()
+            display_name = remaining_name
+        
+        # Hapus bagian dalam kurung siku jika ada (misal [VLESS-TLS])
+        display_name = re.sub(r'\s*\[.*?\]\s*', '', display_name).strip()
+
+        # Cek apakah nama display_name sudah cukup informatif, kalau tidak, pakai original_tag_name utuh
+        if not display_name or display_name.lower().startswith(("vmess", "vless", "trojan", "node")):
+            display_name = original_tag_name.replace('_', ' ') # Ganti underscore jadi spasi
+
+        emoji = get_emoji_from_country_code(country_code)
+        
+        final_tag = f"{emoji} {display_name} #{node_counter}".strip()
+        outbound["tag"] = final_tag
+        logger.debug(f"Converted link to Sing-Box outbound with formatted tag: {outbound.get('tag')}")
+        return outbound
+    return None
+
 
 def process_singbox_config(vmess_links_str, template_content, output_options=None):
     """
@@ -242,35 +238,30 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
         vmess_links = [link.strip() for link in vmess_links_str.split('\n') if link.strip()]
 
         converted_outbounds = []
+        node_counter = 1
         for link in vmess_links:
-            outbound = convert_link_to_singbox_outbound(link)
+            outbound = convert_link_to_singbox_outbound(link, node_counter)
             if outbound:
                 converted_outbounds.append(outbound)
+                node_counter += 1
             else:
                 logger.warning(f"Failed to convert link: {link}")
 
         if not converted_outbounds:
             logger.warning("Nggak ada link VPN valid yang dikonversi. Melanjutkan dengan outbounds template dan default.")
 
-        # Pisahkan outbounds yang ada di template ke dalam kategori yang berbeda
-        # untuk diatur ulang posisinya sesuai permintaan user.
-        
         # Default fixed outbounds
         direct_outbound = {"type": "direct", "tag": "direct"}
         bypass_outbound = {"type": "direct", "tag": "bypass"}
         block_outbound = {"type": "block", "tag": "block"}
         dns_out_outbound = {"type": "dns", "tag": "dns-out"}
 
-        # Hapus default outbounds dari template asli agar bisa diatur ulang posisinya
-        # Dan kumpulkan selector yang ingin dipertahankan di posisi awal
         existing_default_tags = ["direct", "bypass", "block", "dns-out"]
         
-        # Buat mapping dari tag ke objek outbound yang ada di template asli
         template_outbound_map = {o["tag"]: o for o in config_data["outbounds"] if "tag" in o}
 
         final_outbounds = []
 
-        # Urutan yang diinginkan: Internet, Best Latency, Lock Region ID, WhatsApp, GAMESMAX, Route Port Game, Option ADs, Option P0rn
         desired_initial_selector_tags = [
             "Internet",
             "Best Latency",
@@ -292,13 +283,13 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
                     final_outbounds.append({
                         "tag": "Internet",
                         "type": "selector",
-                        "outbounds": [] # Ini akan diupdate nanti
+                        "outbounds": ["Best Latency", "direct"] # Default awal
                     })
                 elif tag_name == "Best Latency":
                      final_outbounds.append({
                         "type": "urltest",
                         "tag": "Best Latency",
-                        "outbounds": [], # Ini akan diisi dengan akun konversi + direct
+                        "outbounds": [], # Akan diisi dengan akun konversi + direct
                         "url": "https://www.gstatic.com/generate_204",
                         "interval": "30s"
                     })
@@ -309,10 +300,11 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
                         "outbounds": []
                     })
                 elif tag_name in EXCLUDED_SELECTOR_TAGS:
+                    # Untuk tag yang dikecualikan, jika tidak di template, tambahkan dengan outbounds default
                     final_outbounds.append({
                         "type": "selector",
                         "tag": tag_name,
-                        "outbounds": ["direct"] # Default untuk selector yang tidak diubah
+                        "outbounds": ["direct", "Internet", "Best Latency", "Lock Region ID"] # Default umum
                     })
                 logger.warning(f"Selector '{tag_name}' tidak ditemukan di template. Menambahkan placeholder default.")
 
@@ -320,15 +312,14 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
         final_outbounds.extend(converted_outbounds)
 
         # Tambahkan outbounds lain dari template yang tidak termasuk dalam kategori di atas
-        # dan belum ditambahkan ke final_outbounds
-        # Filter outbounds yang sudah ditambahkan atau yang akan ditambahkan secara default
+        # dan belum ditambahkan ke final_outbounds.
         current_final_outbound_tags = {o["tag"] for o in final_outbounds if "tag" in o}
         
         for outbound in config_data["outbounds"]:
             tag = outbound.get("tag")
             if tag not in current_final_outbound_tags and tag not in existing_default_tags:
                 final_outbounds.append(outbound)
-                current_final_outbound_tags.add(tag) # Update set of added tags
+                current_final_outbound_tags.add(tag) 
 
         # Tambahkan outbounds default di bagian paling akhir, pastikan tidak duplikat
         if direct_outbound["tag"] not in current_final_outbound_tags: final_outbounds.append(direct_outbound)
@@ -358,34 +349,35 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
                 
                 original_nested_outbounds_list = list(outbound_item["outbounds"])
                 
-                # Buat daftar outbounds baru untuk selector ini
                 new_nested_outbounds = []
 
-                # Untuk "Internet" dan "Best Latency", tambahkan semua akun VPN hasil konversi
+                # Untuk "Internet", "Best Latency", "Lock Region ID", tambahkan semua akun VPN hasil konversi
                 if current_selector_tag in ["Internet", "Best Latency", "Lock Region ID"]:
+                    # Tambahkan akun konversi terlebih dahulu
                     for converted_o in converted_outbounds:
                         if converted_o["tag"] not in new_nested_outbounds:
                             new_nested_outbounds.append(converted_o["tag"])
                     
-                    # Pastikan 'direct' ada di selector "Internet" dan "Best Latency"
+                    # Lalu tambahkan "direct"
                     if "direct" not in new_nested_outbounds and "direct" in all_outbound_tags:
                         new_nested_outbounds.append("direct")
 
-                    # Untuk "Internet", pastikan "Best Latency" ada (jika ada)
-                    if current_selector_tag == "Internet" and "Best Latency" in all_outbound_tags and "Best Latency" not in new_nested_outbounds:
-                        new_nested_outbounds.insert(0, "Best Latency") # Prioritaskan Best Latency di Internet
+                    # Untuk "Internet", pastikan "Best Latency" dan "Lock Region ID" ada di awal
+                    if current_selector_tag == "Internet":
+                        if "Best Latency" in all_outbound_tags and "Best Latency" not in new_nested_outbounds:
+                            new_nested_outbounds.insert(0, "Best Latency") # Prioritaskan Best Latency
+                        if "Lock Region ID" in all_outbound_tags and "Lock Region ID" not in new_nested_outbounds:
+                            # Masukkan setelah Best Latency jika ada, atau di awal jika Best Latency tidak ada
+                            insert_index = 1 if "Best Latency" in new_nested_outbounds else 0
+                            new_nested_outbounds.insert(insert_index, "Lock Region ID")
                     
-                    # Untuk "Internet", tambahkan "Lock Region ID" jika ada
-                    if current_selector_tag == "Internet" and "Lock Region ID" in all_outbound_tags and "Lock Region ID" not in new_nested_outbounds:
-                        new_nested_outbounds.append("Lock Region ID")
-
-                else: # Untuk selector lain yang tidak dikecualikan
-                    # Pertahankan outbounds asli dan tambahkan yang mungkin relevan
+                else: # Untuk selector lain yang tidak dikecualikan dan bukan di atas
+                    # Pertahankan outbounds asli yang masih valid
                     for original_tag_in_selector in original_nested_outbounds_list:
-                        if original_tag_in_selector not in new_nested_outbounds and original_tag_in_selector in all_outbound_tags:
+                        if original_tag_in_selector in all_outbound_tags and original_tag_in_selector not in new_nested_outbounds:
                             new_nested_outbounds.append(original_tag_in_selector)
                     
-                    # Tambahkan akun konversi jika memang diperlukan di selector ini (sesuai logic default)
+                    # Tambahkan akun konversi jika belum ada
                     for converted_o in converted_outbounds:
                         if converted_o["tag"] not in new_nested_outbounds:
                             new_nested_outbounds.append(converted_o["tag"])
@@ -422,4 +414,4 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
 
 if __name__ == '__main__':
     print("Mek, file ini adalah modul logika Sing-Box. Jalankan 'app.py' untuk UI-nya ya.")
-
+                
