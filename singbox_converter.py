@@ -1,4 +1,4 @@
-# singbox_converter.py (Revisi dengan pengecualian selector)
+# singbox_converter.py (Revisi Final)
 import json
 import os
 import urllib.parse
@@ -17,8 +17,6 @@ EXCLUDED_SELECTOR_TAGS = [
     "Option ADs",
     "Option P0rn"
 ]
-
-# --- FUNGSI DARI main.txt LO, DENGAN SEDIKIT PENYESUAIAN LOGGING & ERROR HANDLING ---
 
 def parse_vmess_link(vmess_link):
     """
@@ -237,8 +235,12 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
     Excludes certain selector tags from being updated.
     """
     try:
+        # Debugging: Cek template_content yang masuk
+        logger.debug(f"Received template_content (first 200 chars): {template_content[:200]}")
+        
         # Parse template JSON
         config_data = json.loads(template_content)
+        logger.debug(f"Successfully parsed config_data keys: {config_data.keys()}")
 
         # Pisahkan link VMess/VLESS/Trojan berdasarkan baris baru
         vmess_links = [link.strip() for link in vmess_links_str.split('\n') if link.strip()]
@@ -252,7 +254,13 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
                 logger.warning(f"Failed to convert link: {link}")
 
         if not converted_outbounds:
-            return {"status": "warning", "message": "Nggak ada link VPN yang valid buat dikonversi, Mek!"}
+            # Handle kasus jika tidak ada link valid yang dikonversi
+            # Jika template sudah mengandung outbounds yang cukup, bisa tetap lanjut
+            # Tapi jika tidak ada, ini mungkin error.
+            # Kita bisa kembalikan config_data asli atau tambahkan pesan warning lebih spesifik.
+            # Untuk saat ini, kita akan tambahkan outbounds default jika tidak ada konversi.
+            logger.warning("Nggak ada link VPN valid yang dikonversi. Melanjutkan dengan outbounds template dan default.")
+
 
         # Simpan outbounds 'direct' dan 'dns' dari template jika ada
         # Lalu hapus dari list utama untuk diatur ulang posisinya
@@ -304,7 +312,7 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
         for outbound_selector in config_data["outbounds"]:
             current_selector_tag = outbound_selector.get("tag")
             
-            # --- Pengecualian di sini, tod! ---
+            # --- Pengecualian di sini! ---
             if current_selector_tag in EXCLUDED_SELECTOR_TAGS:
                 logger.info(f"Melewati selector '{current_selector_tag}' karena ada di daftar pengecualian.")
                 continue # Langsung lanjut ke selector berikutnya
@@ -326,7 +334,7 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
                     if converted_outbound["tag"] not in new_nested_outbounds:
                         new_nested_outbounds.append(converted_outbound["tag"])
 
-                # Tambahkan tag 'direct' dan 'dns-out' jika belum ada di selector dan memang ada
+                # Tambahkan tag 'bypass' dan 'dns-out' jika belum ada di selector dan memang ada
                 # Asumsi: selector biasanya mengacu pada node VPN, direct, dan dns-out
                 for default_o in default_outbounds:
                     if default_o["tag"] not in new_nested_outbounds:
@@ -365,4 +373,5 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
 
 if __name__ == '__main__':
     print("Mek, file ini adalah modul logika Sing-Box. Jalankan 'app.py' untuk UI-nya ya.")
-                
+
+                           
