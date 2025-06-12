@@ -1,4 +1,3 @@
-# singbox_converter.py
 import json
 import os
 import urllib.parse
@@ -155,70 +154,112 @@ def process_singbox_config(links, template_path="singbox-template.txt"):
     """
     Processes a list of VPN links, converts them to Sing-Box outbounds,
     and integrates them into a base Sing-Box configuration template.
+    Ensures generated outbounds are inserted after 'bypass'/'dns-out'
+    and 'direct'/'block' are always at the end.
     """
     try:
-        # Baca template konfigurasi Sing-Box dari file
         with open(template_path, 'r', encoding='utf-8') as f:
             config_data = json.load(f)
         logger.info(f"Template Sing-Box berhasil dimuat dari '{template_path}'.")
 
-        # Inisialisasi daftar outbounds baru
-        new_outbounds = []
+        # 1. Konversi semua link VPN ke outbounds Sing-Box
+        generated_outbounds = []
         for link in links:
             outbound = convert_link_to_singbox_outbound(link)
-            if outbound:
-                new_outbounds.append(outbound)
+            if outbound and outbound.get("tag"): # Pastikan outbound valid dan punya tag
+                generated_outbounds.append(outbound)
             else:
-                logger.warning(f"Gagal mengonversi link: {link[:50]}...")
-
-        # Tambahkan outbounds default (direct, block) jika belum ada
-        default_outbounds_tags = ["direct", "block"]
-        for default_tag in default_outbounds_tags:
-            if not any(ob.get("tag") == default_tag for ob in config_data.get("outbounds", [])):
-                if default_tag == "direct":
-                    new_outbounds.append({"tag": "direct", "protocol": "direct"})
-                elif default_tag == "block":
-                    new_outbounds.append({"tag": "block", "protocol": "block"})
+                logger.warning(f"Gagal mengonversi link atau tag tidak ditemukan: {link[:50]}...")
         
-        # Gabungkan outbounds baru dengan outbounds yang sudah ada di template (kecuali direct/block yang udah ditangani)
-        # Jika ada outbounds dengan tag yang sama, yang baru akan menimpa yang lama
-        final_outbounds_map = {ob["tag"]: ob for ob in config_data.get("outbounds", []) if ob["tag"] not in default_outbounds_tags}
-        for outbound in new_outbounds:
-            final_outbounds_map[outbound["tag"]] = outbound
-        
-        config_data["outbounds"] = list(final_outbounds_map.values())
-        logger.info(f"{len(new_outbounds)} outbounds baru berhasil ditambahkan.")
+        # Buat map dari outbounds yang baru digenerate agar mudah diakses
+        generated_outbounds_map = {ob["tag"]: ob for ob in generated_outbounds}
 
+        # 2. Siapkan daftar outbounds akhir
+        final_outbounds_list = []
+        inserted_point_found = False
+        
+        # Pisahkan 'direct' dan 'block' dari outbounds yang ada di template agar bisa ditaruh di akhir
+        # Ini penting untuk memastikan 'direct' dan 'block' selalu di paling bawah.
+        temp_existing_outbounds = []
+        direct_ob_from_template = None
+        block_ob_from_template = None
+
+        for ob in config_data.get("outbounds", []):
+            if ob.get("tag") == "direct":
+                direct_ob_from_template = ob
+            elif ob.get("tag") == "block":
+                block_ob_from_template = ob
+            else:
+                temp_existing_outbounds.append(ob)
+        
+        # 3. Iterasi melalui outbounds yang bukan 'direct'/'block' dari template untuk menyisipkan
+        for ob in temp_existing_outbounds:
+            final_outbounds_list.append(ob)
+            
+            # Jika ini adalah 'dns-out' atau 'bypass', sisipkan outbounds yang digenerate di sini
+            if not inserted_point_found and (ob.get("tag") == "dns-out" or ob.get("tag") == "bypass"):
+                for gen_ob in generated_outbounds:
+                    # Hanya tambahkan jika belum ada di final_outbounds_list (untuk menghindari duplikasi jika tag sama)
+                    if gen_ob.get("tag") not in [item.get("tag") for item in final_outbounds_list]:
+                        final_outbounds_list.append(gen_ob)
+                inserted_point_found = True
+                logger.debug(f"Outbounds VPN disisipkan setelah '{ob.get('tag')}'.")
+        
+        # Jika outbounds yang digenerate belum disisipkan (karena 'dns-out'/'bypass' tidak ada di template)
+        if not inserted_point_found:
+            for gen_ob in generated_outbounds:
+                if gen_ob.get("tag") not in [item.get("tag") for item in final_outbounds_list]:
+                    final_outbounds_list.append(gen_ob)
+            logger.debug("Outbounds VPN disisipkan di akhir list karena titik sisipan spesifik tidak ditemukan.")
+
+        # 4. Pastikan 'direct' dan 'block' ada dan di akhir list
+        # Gunakan definisi dari template jika ada, kalau tidak, buat default
+        if not any(ob.get("tag") == "direct" for ob in final_outbounds_list):
+            if direct_ob_from_template:
+                final_outbounds_list.append(direct_ob_from_template)
+            else:
+                final_outbounds_list.append({"tag": "direct", "protocol": "direct"})
+        
+        if not any(ob.get("tag") == "block" for ob in final_outbounds_list):
+            if block_ob_from_template:
+                final_outbounds_list.append(block_ob_from_template)
+            else:
+                final_outbounds_list.append({"tag": "block", "protocol": "block"})
+
+        config_data["outbounds"] = final_outbounds_list
+        logger.info(f"{len(generated_outbounds)} outbounds baru hasil konversi berhasil ditambahkan/disisipkan.")
+        
         # --- UPDATE REFERENSI DI SELECTOR/URLTEST OUTBOUNDS ---
-        # Contoh: Jika ada outbound dengan type "selector" atau "urltest"
-        # dan daftar "outbounds" mereka merujuk ke tag-tag yang baru dibuat
-        
         updated_ref_count = 0
+        all_final_outbound_tags = [ob["tag"] for ob in config_data["outbounds"]] # Ambil semua tag yang sudah final
+        
         for outbound_selector in config_data.get("outbounds", []):
             if outbound_selector.get("type") in ["selector", "urltest"]:
                 current_selector_tag = outbound_selector.get("tag", "Unknown Selector")
-                original_nested_outbounds_list = outbound_selector.get("outbounds", []) # Simpan aslinya
+                original_nested_outbounds_list = outbound_selector.get("outbounds", [])
                 
-                # Buat daftar baru untuk nested outbounds dengan memastikan setiap tag unik
-                # dan hanya tambahkan tag yang baru di generate
+                combined_tags = []
                 
-                # Filter out old generated tags if they exist (optional, for clean-up)
-                filtered_nested_outbounds = [
-                    tag for tag in original_nested_outbounds_list 
-                    if tag not in [ob["tag"] for ob in new_outbounds]
-                ]
-
-                # Tambahkan semua tag outbounds baru ke daftar
-                final_nested_outbounds = [ob["tag"] for ob in new_outbounds] + filtered_nested_outbounds
+                # Tambahkan tag yang baru digenerate oleh proses ini dulu
+                for gen_ob in generated_outbounds: # Ambil dari list generated_outbounds asli
+                    if gen_ob["tag"] in all_final_outbound_tags and gen_ob["tag"] not in combined_tags:
+                        combined_tags.append(gen_ob["tag"])
                 
-                # Pastikan tidak ada duplikasi tag dalam daftar akhir
-                final_nested_outbounds = list(dict.fromkeys(final_nested_outbounds)) # Remove duplicates while preserving order
+                # Tambahkan tag dari original selector list yang masih ada di final_outbounds_list dan belum ditambahkan
+                for tag in original_nested_outbounds_list:
+                    if tag in all_final_outbound_tags and tag not in combined_tags:
+                        combined_tags.append(tag)
                 
-                # Hanya update jika ada perubahan pada list outbounds nested
-                if final_nested_outbounds != original_nested_outbounds_list:
-                    outbound_selector["outbounds"] = final_nested_outbounds
+                # Tambahkan 'direct' dan 'block' jika belum ada di selector dan ada di final outbounds
+                if "direct" in all_final_outbound_tags and "direct" not in combined_tags:
+                    combined_tags.append("direct")
+                if "block" in all_final_outbound_tags and "block" not in combined_tags:
+                    combined_tags.append("block")
+                
+                if combined_tags != original_nested_outbounds_list:
+                    outbound_selector["outbounds"] = combined_tags
                     updated_ref_count += 1
-                    logger.debug(f"Updated selector '{current_selector_tag}'. New outbounds: {final_nested_outbounds}")
+                    logger.debug(f"Updated selector '{current_selector_tag}'. New outbounds: {combined_tags}")
                 else:
                     logger.debug(f"Selector '{current_selector_tag}' not updated (no changes).")
             else:
@@ -226,7 +267,6 @@ def process_singbox_config(links, template_path="singbox-template.txt"):
 
         logger.info(f"{updated_ref_count} selector/urltest outbounds berhasil diperbarui referensinya.")
 
-        # Dump objek JSON yang sudah di-update menjadi string JSON
         new_config_content = json.dumps(config_data, indent=2)
         
         return {
@@ -241,7 +281,4 @@ def process_singbox_config(links, template_path="singbox-template.txt"):
     except Exception as e:
         logger.error(f"Error during Sing-Box conversion: {e}", exc_info=True)
         return {"status": "error", "message": f"Terjadi error yang nggak terduga saat konversi Sing-Box: {e}"}
-
-if __name__ == '__main__':
-    print("Mek, file ini adalah modul logika Sing-Box. Jalankan 'app.py' untuk UI-nya ya.")
 
