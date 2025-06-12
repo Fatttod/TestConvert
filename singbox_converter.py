@@ -349,12 +349,6 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
                             country_emoji = COUNTRY_CODE_TO_EMOJI[code]
                             remaining_name = country_code_match.group(2).strip() # Sisa string setelah kode negara
                             
-                            # Jika ada tanda kurung di sekitar kode negara, hapus dari remaining_name jika masih ada
-                            # Ini untuk kasus "(SG) DigitalOcean" -> remaining_name jadi "DigitalOcean"
-                            # atau "SG DigitalOcean" -> remaining_name jadi "DigitalOcean"
-                            # Tapi ini nggak dipakai kalau kode negara sudah berhasil di-parse dan dipisah
-                            # remaining_name = remaining_name.strip() # Pastikan tidak ada spasi di awal/akhir
-                            
                             # Hapus tanda kutip jika ada di awal/akhir remaining_name
                             if remaining_name.startswith('"') and remaining_name.endswith('"'):
                                 remaining_name = remaining_name[1:-1].strip()
@@ -403,4 +397,12 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
             with open(template_file_path, 'r') as f:
                 config_data = json.load(f)
         except FileNotFoundError:
-            
+            return {"status": "error", "message": f"File template Sing-Box '{template_file_path}' tidak ditemukan."}
+        except json.JSONDecodeError as e:
+            return {"status": "error", "message": f"Format JSON di file template '{template_file_path}' tidak valid: {e}"}
+        except Exception as e:
+            return {"status": "error", "message": f"Error memuat file template '{template_file_path}': {e}"}
+
+        # Pastikan ada bagian "outbounds"
+        if "outbounds" not in config_data or not isinstance(config_data["outbounds"], list):
+            r
