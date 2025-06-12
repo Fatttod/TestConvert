@@ -1,3 +1,4 @@
+# singbox_converter.py (Revisi dengan pengecualian selector)
 import json
 import os
 import urllib.parse
@@ -7,6 +8,15 @@ import logging
 import sys
 
 logger = logging.getLogger(__name__)
+
+# Daftar tag selector yang TIDAK boleh diubah outbounds-nya
+EXCLUDED_SELECTOR_TAGS = [
+    "WhatsApp",
+    "GAMESMAX(ML/FF/AOV)",
+    "Route Port Game",
+    "Option ADs",
+    "Option P0rn"
+]
 
 # --- FUNGSI DARI main.txt LO, DENGAN SEDIKIT PENYESUAIAN LOGGING & ERROR HANDLING ---
 
@@ -36,237 +46,311 @@ def parse_vmess_link(vmess_link):
 
 def convert_link_to_singbox_outbound(link_str):
     """
-    Converts a single VMess, VLESS, or Trojan link to a Sing-Box outbound configuration.
-    Returns a dictionary of the Sing-Box outbound or None if parsing fails.
+    Converts a VMess, VLESS, or Trojan link string to a Sing-Box outbound configuration.
+    Currently supports: VMess (base64 JSON), VLESS (raw URL), Trojan (raw URL).
+    Returns a dictionary of Sing-Box outbound config, or None if conversion fails.
     """
-    link_str = link_str.strip()
     if link_str.startswith("vmess://"):
         vmess_config = parse_vmess_link(link_str)
-        if vmess_config:
-            # Sing-Box VMess outbound structure
-            return {
-                "tag": vmess_config.get("ps", "VMess-" + vmess_config.get("id", "Unknown")),
-                "type": "vmess",
-                "server": vmess_config.get("add"),
-                "server_port": int(vmess_config.get("port")),
-                "uuid": vmess_config.get("id"),
-                "security": vmess_config.get("scty", "auto"),
-                "alter_id": int(vmess_config.get("aid", 0)),
-                "network": vmess_config.get("net", "tcp"),
-                "tls": {
-                    "enabled": vmess_config.get("tls", "") == "tls",
-                    "server_name": vmess_config.get("host") if vmess_config.get("host") else vmess_config.get("add"),
-                    "insecure": vmess_config.get("skip_cert_verify", False), # Default to false if not specified
-                    "disable_sni": False # Add disable_sni based on your requirements
-                } if vmess_config.get("tls", "") == "tls" else { "enabled": False },
-                "transport": {
-                    "type": vmess_config.get("net", "tcp"),
-                    "websocket_path": vmess_config.get("path", ""),
-                    "websocket_headers": {
-                        "Host": vmess_config.get("host", "") if vmess_config.get("host") else vmess_config.get("add", "")
-                    },
-                    "grpc_service_name": vmess_config.get("path", "") # for gRPC
-                } if vmess_config.get("net", "tcp") in ["ws", "grpc"] else None
-            }
-    elif link_str.startswith("vless://"):
-        # VLESS link format: vless://uuid@server:port?params#name
-        try:
-            parsed_url = urllib.parse.urlparse(link_str)
-            user_info, server_port = parsed_url.netloc.split('@')
-            server, port = server_port.split(':')
-            params = urllib.parse.parse_qs(parsed_url.query)
-            tag_name = urllib.parse.unquote(parsed_url.fragment) if parsed_url.fragment else server
+        if not vmess_config:
+            return None
+        
+        # Mapping VMess config ke Sing-Box outbound
+        outbound = {
+            "tag": vmess_config.get("ps", "VMess_Node"), # 'ps' is the node name in VMess
+            "type": "vmess",
+            "server": vmess_config.get("add"),
+            "server_port": int(vmess_config.get("port")),
+            "uuid": vmess_config.get("id"),
+            "security": vmess_config.get("scy", "auto"), # 'scy' is security/encryption method
+            "alterId": int(vmess_config.get("aid", 0)),
+            "network": vmess_config.get("net", "tcp"),
+        }
 
-            # Sing-Box VLESS outbound structure
-            return {
-                "tag": tag_name,
+        # Tambahkan TLS jika 'tls' ada dan true
+        if vmess_config.get("tls", "") == "tls":
+            outbound["tls"] = {
+                "enabled": True,
+                "server_name": vmess_config.get("host", vmess_config.get("add")),
+                "insecure": False,
+                "disable_sni": False
+            }
+            if vmess_config.get("fp"): # fingerprint
+                outbound["tls"]["utls"] = {"enabled": True, "fingerprint": vmess_config["fp"]}
+            if vmess_config.get("alpn"):
+                outbound["tls"]["alpn"] = vmess_config["alpn"].split(',')
+
+
+        # Transport settings (ws, http, grpc, quic, etc.)
+        transport_type = vmess_config.get("net", "tcp")
+        transport_settings = {}
+
+        if transport_type == "ws":
+            transport_settings = {
+                "type": "ws",
+                "websocket_path": vmess_config.get("path", "/"),
+                "websocket_headers": {
+                    "Host": vmess_config.get("host", "")
+                }
+            }
+        elif transport_type == "grpc":
+            transport_settings = {
+                "type": "grpc",
+                "grpc_service_name": vmess_config.get("path", "")
+            }
+        # Tambahkan konfigurasi transport lainnya jika diperlukan (e.g., http, quic)
+
+        if transport_settings:
+            outbound["transport"] = transport_settings
+        
+        logger.debug(f"Converted VMess link to Sing-Box outbound: {outbound.get('tag')}")
+        return outbound
+    
+    elif link_str.startswith("vless://"):
+        try:
+            # Parse VLESS link
+            parsed_url = urllib.parse.urlparse(link_str)
+            user_info, server_info = parsed_url.netloc.split('@')
+            uuid = user_info
+            server, port = server_info.split(':')
+            params = urllib.parse.parse_qs(parsed_url.query)
+            
+            tag = urllib.parse.unquote(parsed_url.fragment) if parsed_url.fragment else f"VLESS_Node_{server}"
+
+            outbound = {
+                "tag": tag,
                 "type": "vless",
                 "server": server,
                 "server_port": int(port),
-                "uuid": user_info,
-                "flow": params.get("flow", [""])[0] if params.get("flow") else "",
-                "tls": {
-                    "enabled": params.get("security", [""])[0] == "tls",
-                    "server_name": params.get("sni", [""])[0] if params.get("sni") else server,
-                    "insecure": params.get("allowInsecure", ["false"])[0].lower() == "true",
-                    "disable_sni": False, # Add disable_sni based on your requirements
-                    "reality_opts": { # Optional: for Reality
-                        "enabled": params.get("security", [""])[0] == "reality",
-                        "public_key": params.get("pbk", [""])[0],
-                        "short_id": params.get("sid", [""])[0]
-                    } if params.get("security", [""])[0] == "reality" else None
-                } if params.get("security", [""])[0] in ["tls", "reality"] else { "enabled": False },
-                "transport": {
-                    "type": params.get("type", ["tcp"])[0],
-                    "websocket_path": params.get("path", [""])[0],
-                    "websocket_headers": {
-                        "Host": params.get("host", [""])[0] if params.get("host") else server
-                    },
-                    "grpc_service_name": params.get("serviceName", [""])[0] # for gRPC
-                } if params.get("type", ["tcp"])[0] in ["ws", "grpc"] else None
+                "uuid": uuid,
+                "network": params.get("type", ["tcp"])[0],
             }
+
+            # TLS settings
+            if "security" in params and params["security"][0] == "tls":
+                outbound["tls"] = {
+                    "enabled": True,
+                    "server_name": params.get("sni", [server])[0],
+                    "insecure": False,
+                    "disable_sni": False
+                }
+                if params.get("fp"): # fingerprint
+                    outbound["tls"]["utls"] = {"enabled": True, "fingerprint": params["fp"][0]}
+                if params.get("alpn"):
+                    outbound["tls"]["alpn"] = params["alpn"][0].split(',')
+
+            # Transport settings
+            transport_type = params.get("type", ["tcp"])[0]
+            transport_settings = {}
+            if transport_type == "ws":
+                transport_settings = {
+                    "type": "ws",
+                    "websocket_path": params.get("path", ["/"])[0],
+                    "websocket_headers": {
+                        "Host": params.get("host", [""])[0]
+                    }
+                }
+            elif transport_type == "grpc":
+                transport_settings = {
+                    "type": "grpc",
+                    "grpc_service_name": params.get("serviceName", [""])[0]
+                }
+            # Tambahkan konfigurasi transport lainnya jika diperlukan
+
+            if transport_settings:
+                outbound["transport"] = transport_settings
+
+            logger.debug(f"Converted VLESS link to Sing-Box outbound: {outbound.get('tag')}")
+            return outbound
         except Exception as e:
             logger.error(f"Error parsing VLESS link for {link_str[:50]}...: {e}")
             return None
+    
     elif link_str.startswith("trojan://"):
-        # Trojan link format: trojan://password@server:port?params#name
         try:
-            # Parse the URL parts
+            # Parse Trojan link
+            # Format: trojan://password@server:port?param=value#tag
             parsed_url = urllib.parse.urlparse(link_str)
-            password_server_port = parsed_url.netloc
+            password = parsed_url.username
+            server, port = parsed_url.netloc.split('@')[1].split(':') if '@' in parsed_url.netloc else parsed_url.netloc.split(':')
             params = urllib.parse.parse_qs(parsed_url.query)
-            tag_name = urllib.parse.unquote(parsed_url.fragment) if parsed_url.fragment else parsed_url.netloc
+            
+            tag = urllib.parse.unquote(parsed_url.fragment) if parsed_url.fragment else f"Trojan_Node_{server}"
 
-            # Split password from server:port
-            password, server_port = password_server_port.split('@', 1)
-            server, port = server_port.split(':', 1)
-
-            # Sing-Box Trojan outbound structure
-            return {
-                "tag": tag_name,
+            outbound = {
+                "tag": tag,
                 "type": "trojan",
                 "server": server,
                 "server_port": int(port),
                 "password": password,
-                "network": params.get("type", ["tcp"])[0], # Assuming 'type' param can be 'tcp', 'ws', 'grpc'
-                "tls": {
-                    "enabled": True, # Trojan always uses TLS
-                    "server_name": params.get("sni", [""])[0] if params.get("sni") else server,
-                    "insecure": params.get("allowInsecure", ["false"])[0].lower() == "true",
-                    "disable_sni": False # Add disable_sni based on your requirements
-                },
-                "transport": {
-                    "type": params.get("type", ["tcp"])[0],
-                    "websocket_path": params.get("path", [""])[0],
-                    "websocket_headers": {
-                        "Host": params.get("host", [""])[0] if params.get("host") else server
-                    },
-                    "grpc_service_name": params.get("serviceName", [""])[0] # for gRPC
-                } if params.get("type", ["tcp"])[0] in ["ws", "grpc"] else None
             }
+
+            # TLS settings (Trojan usually implies TLS)
+            if "security" in params and params["security"][0] == "tls" or "sni" in params:
+                outbound["tls"] = {
+                    "enabled": True,
+                    "server_name": params.get("sni", [server])[0],
+                    "insecure": False,
+                    "disable_sni": False
+                }
+                if params.get("fp"): # fingerprint
+                    outbound["tls"]["utls"] = {"enabled": True, "fingerprint": params["fp"][0]}
+                if params.get("alpn"):
+                    outbound["tls"]["alpn"] = params["alpn"][0].split(',')
+
+
+            # Transport settings
+            transport_type = params.get("type", ["tcp"])[0]
+            transport_settings = {}
+            if transport_type == "ws":
+                transport_settings = {
+                    "type": "ws",
+                    "websocket_path": params.get("path", ["/"])[0],
+                    "websocket_headers": {
+                        "Host": params.get("host", [""])[0]
+                    }
+                }
+            elif transport_type == "grpc":
+                transport_settings = {
+                    "type": "grpc",
+                    "grpc_service_name": params.get("serviceName", [""])[0]
+                }
+            # Tambahkan konfigurasi transport lainnya jika diperlukan
+
+            if transport_settings:
+                outbound["transport"] = transport_settings
+            
+            logger.debug(f"Converted Trojan link to Sing-Box outbound: {outbound.get('tag')}")
+            return outbound
         except Exception as e:
             logger.error(f"Error parsing Trojan link for {link_str[:50]}...: {e}")
             return None
-    logger.warning(f"Unsupported link type for {link_str[:50]}...")
-    return None
 
-def process_singbox_config(links, template_path="singbox-template.txt"):
+    else:
+        logger.warning(f"Unsupported link type for conversion: {link_str[:50]}...")
+        return None
+
+def process_singbox_config(vmess_links_str, template_content, output_options=None):
     """
-    Processes a list of VPN links, converts them to Sing-Box outbounds,
-    and integrates them into a base Sing-Box configuration template.
-    Ensures generated outbounds are inserted after 'bypass'/'dns-out'
-    and 'direct'/'block' are always at the end.
+    Processes VMess/VLESS/Trojan links and integrates them into a Sing-Box configuration template.
+    It puts converted outbounds first, then 'bypass' and 'dns-out'.
+    Excludes certain selector tags from being updated.
     """
     try:
-        with open(template_path, 'r', encoding='utf-8') as f:
-            config_data = json.load(f)
-        logger.info(f"Template Sing-Box berhasil dimuat dari '{template_path}'.")
+        # Parse template JSON
+        config_data = json.loads(template_content)
 
-        # 1. Konversi semua link VPN ke outbounds Sing-Box
-        generated_outbounds = []
-        for link in links:
+        # Pisahkan link VMess/VLESS/Trojan berdasarkan baris baru
+        vmess_links = [link.strip() for link in vmess_links_str.split('\n') if link.strip()]
+
+        converted_outbounds = []
+        for link in vmess_links:
             outbound = convert_link_to_singbox_outbound(link)
-            if outbound and outbound.get("tag"): # Pastikan outbound valid dan punya tag
-                generated_outbounds.append(outbound)
+            if outbound:
+                converted_outbounds.append(outbound)
             else:
-                logger.warning(f"Gagal mengonversi link atau tag tidak ditemukan: {link[:50]}...")
-        
-        # Buat map dari outbounds yang baru digenerate agar mudah diakses
-        generated_outbounds_map = {ob["tag"]: ob for ob in generated_outbounds}
+                logger.warning(f"Failed to convert link: {link}")
 
-        # 2. Siapkan daftar outbounds akhir
-        final_outbounds_list = []
-        inserted_point_found = False
-        
-        # Pisahkan 'direct' dan 'block' dari outbounds yang ada di template agar bisa ditaruh di akhir
-        # Ini penting untuk memastikan 'direct' dan 'block' selalu di paling bawah.
-        temp_existing_outbounds = []
-        direct_ob_from_template = None
-        block_ob_from_template = None
+        if not converted_outbounds:
+            return {"status": "warning", "message": "Nggak ada link VPN yang valid buat dikonversi, Mek!"}
 
-        for ob in config_data.get("outbounds", []):
-            if ob.get("tag") == "direct":
-                direct_ob_from_template = ob
-            elif ob.get("tag") == "block":
-                block_ob_from_template = ob
+        # Simpan outbounds 'direct' dan 'dns' dari template jika ada
+        # Lalu hapus dari list utama untuk diatur ulang posisinya
+        default_outbounds = []
+        outbounds_to_keep = []
+        bypass_outbound_found = False
+        dns_out_outbound_found = False
+
+        for outbound in config_data["outbounds"]:
+            if outbound.get("type") == "direct" and outbound.get("tag") == "bypass":
+                default_outbounds.append(outbound)
+                bypass_outbound_found = True
+            elif outbound.get("type") == "dns" and outbound.get("tag") == "dns-out":
+                default_outbounds.append(outbound)
+                dns_out_outbound_found = True
             else:
-                temp_existing_outbounds.append(ob)
+                outbounds_to_keep.append(outbound)
         
-        # 3. Iterasi melalui outbounds yang bukan 'direct'/'block' dari template untuk menyisipkan
-        for ob in temp_existing_outbounds:
-            final_outbounds_list.append(ob)
-            
-            # Jika ini adalah 'dns-out' atau 'bypass', sisipkan outbounds yang digenerate di sini
-            if not inserted_point_found and (ob.get("tag") == "dns-out" or ob.get("tag") == "bypass"):
-                for gen_ob in generated_outbounds:
-                    # Hanya tambahkan jika belum ada di final_outbounds_list (untuk menghindari duplikasi jika tag sama)
-                    if gen_ob.get("tag") not in [item.get("tag") for item in final_outbounds_list]:
-                        final_outbounds_list.append(gen_ob)
-                inserted_point_found = True
-                logger.debug(f"Outbounds VPN disisipkan setelah '{ob.get('tag')}'.")
-        
-        # Jika outbounds yang digenerate belum disisipkan (karena 'dns-out'/'bypass' tidak ada di template)
-        if not inserted_point_found:
-            for gen_ob in generated_outbounds:
-                if gen_ob.get("tag") not in [item.get("tag") for item in final_outbounds_list]:
-                    final_outbounds_list.append(gen_ob)
-            logger.debug("Outbounds VPN disisipkan di akhir list karena titik sisipan spesifik tidak ditemukan.")
+        # Tambahkan outbound 'bypass' dan 'dns-out' jika belum ada di template
+        # dengan struktur yang sesuai permintaan user
+        if not bypass_outbound_found:
+            default_outbounds.append({
+                "type": "direct",
+                "tag": "bypass"
+            })
+        if not dns_out_outbound_found:
+            default_outbounds.append({
+                "type": "dns",
+                "tag": "dns-out"
+            })
 
-        # 4. Pastikan 'direct' dan 'block' ada dan di akhir list
-        # Gunakan definisi dari template jika ada, kalau tidak, buat default
-        if not any(ob.get("tag") == "direct" for ob in final_outbounds_list):
-            if direct_ob_from_template:
-                final_outbounds_list.append(direct_ob_from_template)
-            else:
-                final_outbounds_list.append({"tag": "direct", "protocol": "direct"})
-        
-        if not any(ob.get("tag") == "block" for ob in final_outbounds_list):
-            if block_ob_from_template:
-                final_outbounds_list.append(block_ob_from_template)
-            else:
-                final_outbounds_list.append({"tag": "block", "protocol": "block"})
 
-        config_data["outbounds"] = final_outbounds_list
-        logger.info(f"{len(generated_outbounds)} outbounds baru hasil konversi berhasil ditambahkan/disisipkan.")
-        
-        # --- UPDATE REFERENSI DI SELECTOR/URLTEST OUTBOUNDS ---
+        # Gabungkan semua outbounds: yang baru dikonversi + yang dipertahankan + default outbounds
+        # Pastikan outbounds yang dikonversi ada di paling atas
+        # dan default outbounds (bypass, dns-out) di paling bawah
+        final_outbounds = []
+        final_outbounds.extend(converted_outbounds) # Akun VPN dikonversi ditaruh paling atas
+        final_outbounds.extend(outbounds_to_keep) # Outbounds lain dari template
+        final_outbounds.extend(default_outbounds) # 'bypass' dan 'dns-out' ditaruh paling bawah
+
+        config_data["outbounds"] = final_outbounds
+
+        # --- UPDATE REFERENSI UNTUK SELECTOR/URLTEST (DENGAN PENGECUALIAN) ---
+        # Kumpulkan semua tag outbound yang baru (termasuk yang dikonversi)
+        all_outbound_tags = [o["tag"] for o in final_outbounds if "tag" in o]
+        logger.debug(f"All available outbound tags after conversion: {all_outbound_tags}")
+
         updated_ref_count = 0
-        all_final_outbound_tags = [ob["tag"] for ob in config_data["outbounds"]] # Ambil semua tag yang sudah final
-        
-        for outbound_selector in config_data.get("outbounds", []):
-            if outbound_selector.get("type") in ["selector", "urltest"]:
-                current_selector_tag = outbound_selector.get("tag", "Unknown Selector")
-                original_nested_outbounds_list = outbound_selector.get("outbounds", [])
+        for outbound_selector in config_data["outbounds"]:
+            current_selector_tag = outbound_selector.get("tag")
+            
+            # --- Pengecualian di sini, tod! ---
+            if current_selector_tag in EXCLUDED_SELECTOR_TAGS:
+                logger.info(f"Melewati selector '{current_selector_tag}' karena ada di daftar pengecualian.")
+                continue # Langsung lanjut ke selector berikutnya
+
+            if (outbound_selector.get("type") == "selector" or \
+                outbound_selector.get("type") == "urltest") and \
+                "outbounds" in outbound_selector and \
+                isinstance(outbound_selector["outbounds"], list):
                 
-                combined_tags = []
+                original_nested_outbounds_list = list(outbound_selector["outbounds"]) # Salin untuk perbandingan
                 
-                # Tambahkan tag yang baru digenerate oleh proses ini dulu
-                for gen_ob in generated_outbounds: # Ambil dari list generated_outbounds asli
-                    if gen_ob["tag"] in all_final_outbound_tags and gen_ob["tag"] not in combined_tags:
-                        combined_tags.append(gen_ob["tag"])
-                
-                # Tambahkan tag dari original selector list yang masih ada di final_outbounds_list dan belum ditambahkan
-                for tag in original_nested_outbounds_list:
-                    if tag in all_final_outbound_tags and tag not in combined_tags:
-                        combined_tags.append(tag)
-                
-                # Tambahkan 'direct' dan 'block' jika belum ada di selector dan ada di final outbounds
-                if "direct" in all_final_outbound_tags and "direct" not in combined_tags:
-                    combined_tags.append("direct")
-                if "block" in all_final_outbound_tags and "block" not in combined_tags:
-                    combined_tags.append("block")
-                
-                if combined_tags != original_nested_outbounds_list:
-                    outbound_selector["outbounds"] = combined_tags
+                # Buat daftar outbounds baru untuk selector ini,
+                # prioritaskan yang dikonversi, lalu tambahkan yang default/lainnya dari template
+                new_nested_outbounds = []
+
+                # Tambahkan hanya tag yang sudah dikonversi ke selector (jika ada)
+                # Ini mengasumsikan selector ingin menyertakan semua node VPN
+                for converted_outbound in converted_outbounds:
+                    if converted_outbound["tag"] not in new_nested_outbounds:
+                        new_nested_outbounds.append(converted_outbound["tag"])
+
+                # Tambahkan tag 'direct' dan 'dns-out' jika belum ada di selector dan memang ada
+                # Asumsi: selector biasanya mengacu pada node VPN, direct, dan dns-out
+                for default_o in default_outbounds:
+                    if default_o["tag"] not in new_nested_outbounds:
+                        new_nested_outbounds.append(default_o["tag"])
+
+                # Tambahkan outbound lain yang ada di selector asli, kecuali yang sudah ditambahkan
+                for original_tag in original_nested_outbounds_list:
+                    if original_tag not in new_nested_outbounds and original_tag in all_outbound_tags:
+                        new_nested_outbounds.append(original_tag)
+
+                # Hanya update jika ada perubahan pada list outbounds nested
+                if new_nested_outbounds != original_nested_outbounds_list:
+                    outbound_selector["outbounds"] = new_nested_outbounds
                     updated_ref_count += 1
-                    logger.debug(f"Updated selector '{current_selector_tag}'. New outbounds: {combined_tags}")
+                    logger.debug(f"Updated selector '{current_selector_tag}'. New outbounds: {new_nested_outbounds}")
                 else:
                     logger.debug(f"Selector '{current_selector_tag}' not updated (no changes).")
             else:
-                logger.debug(f"Skipping non-selector item or malformed selector: {outbound_selector.get('tag', 'No Tag')} (Type: {type(outbound_selector)})")
+                logger.debug(f"Skipping non-selector item or malformed selector: {outbound_selector.get('tag', 'No Tag')} (Type: {type(outbound_selector)})\n{outbound_selector}")
+
 
         logger.info(f"{updated_ref_count} selector/urltest outbounds berhasil diperbarui referensinya.")
 
+        # Dump objek JSON yang sudah di-update menjadi string JSON
         new_config_content = json.dumps(config_data, indent=2)
         
         return {
@@ -275,10 +359,10 @@ def process_singbox_config(links, template_path="singbox-template.txt"):
             "config_content": new_config_content, 
         }
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Error parsing JSON di template: {e}", exc_info=True)
-        return {"status": "error", "message": f"Error parsing JSON di template, Mek! Pastikan formatnya valid dan tidak ada koma yang salah: {e}"}
     except Exception as e:
         logger.error(f"Error during Sing-Box conversion: {e}", exc_info=True)
         return {"status": "error", "message": f"Terjadi error yang nggak terduga saat konversi Sing-Box: {e}"}
 
+if __name__ == '__main__':
+    print("Mek, file ini adalah modul logika Sing-Box. Jalankan 'app.py' untuk UI-nya ya.")
+                
