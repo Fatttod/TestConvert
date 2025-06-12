@@ -125,12 +125,13 @@ if selected_converter:
                     if output_location == "Download File":
                         output_filename = selected_converter_name.lower().replace(" ", "_") + "_config.json"
                         st.download_button(
-                            label=f"⬇️ Download {selected_converter_name} Config",
-                            data=generated_config.encode(selected_converter["output_mime"]), # Encode to bytes for download
-                            file_name=output_filename,
-                            mime=selected_converter["output_mime"],
-                            key="download_button"
-                        )
+    label=f"⬇️ Download {selected_converter_name} Config",
+    data=generated_config.encode("utf-8"), # GANTI ke "utf-8"
+    file_name=output_filename,
+    mime=selected_converter["output_mime"],
+    key="download_button"
+)
+
                         st.code(generated_config, language=selected_converter["output_language"])
 
                     elif output_location == "Upload ke GitHub":
