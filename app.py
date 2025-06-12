@@ -5,7 +5,7 @@ import logging
 
 from github import Github, GithubException
 # Import fungsi konversi dari file terpisah
-from singbox_converter import process_singbox_config # Panggil fungsi ini
+from singbox_converter import process_singbox_config 
 
 # --- KONFIGURASI LOGGING ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -139,4 +139,3 @@ elif not is_admin:
 
 st.markdown("---")
 st.caption("Dibuat dengan 🔥 oleh teman lo.")
-  
