@@ -207,7 +207,7 @@ def parse_trojan_link(trojan_link):
             "address": host,
             "port": int(port),
             "security": query_params.get('security', ['tls'])[0], # Trojan default security is tls
-            "type": query_params.get('type', ['tcp')[0],
+            "type": query_params.get('type', ['tcp'])[0],
             "sni": query_params.get('sni', [''])[0],
             "alpn": query_params.get('alpn', [''])[0],
             "fp": query_params.get('fp', [''])[0], # flow fingerprint
