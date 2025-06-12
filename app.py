@@ -1,171 +1,171 @@
+# app.py (Revisi untuk template lokal, hasil ke GitHub/Download, dan Multiple Links)
 import streamlit as st
 import os
 import sys
 import logging
-from github import Github, GithubException
-import json # Tambahkan ini untuk validasi JSON
+import base64 # Tetap butuh base64 untuk encode content ke GitHub
+from github import Github, GithubException 
 
-# Import fungsi konversi dari file terpisah
-# Pastikan singbox_converter.py ada di direktori yang sama dengan app.py
-from singbox_converter import process_singbox_config 
-
-# --- KONFIGURASI LOGGING ---
+# Set up basic logging for Streamlit app
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     level=logging.INFO,
                     stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
-# --- FUNGSI UPDATE GITHUB FILE ---
-def update_github_file(repo, file_path, new_content, commit_message):
-    try:
-        try:
-            contents = repo.get_contents(file_path, ref="main") # Asumsi branch default adalah 'main'
-            repo.update_file(contents.path, commit_message, new_content, contents.sha, branch="main")
-            st.success(f"File '{file_path}' updated successfully in '{repo.full_name}'.")
-        except GithubException as e:
-            if e.status == 404: # File tidak ditemukan, buat file baru
-                repo.create_file(file_path, commit_message, new_content, branch="main")
-                st.success(f"File '{file_path}' created successfully in '{repo.full_name}'.")
-            else:
-                st.error(f"GitHub Error updating/creating file '{file_path}': {e.data.get('message', 'Unknown error')}")
-                logger.error(f"Failed to update/create file '{file_path}' in '{repo.full_name}': {e}", exc_info=True)
-                return False
-        return True
-    except Exception as e:
-        st.error(f"An unexpected error occurred during GitHub operation: {e}")
-        logger.error(f"Failed to update/create file '{file_path}' in '{repo.full_name}': {e}", exc_info=True)
-        return False
+# --- KONFIGURASI GITHUB ---\n
+# PENTING: GANTI ini dengan info repo lo, Mek!
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN_VPN_BOT") 
+REPO_OWNER = "NamaUsernameLoDiGitHub" 
+REPO_NAME = "MySingBoxConfigs"      
+BRANCH_NAME = "main"                
 
+# --- Import Fungsi dari Modul Konverter Spesifik ---
+# Sekarang kita import fungsi untuk memproses BANYAK link sekaligus
+try:
+    from singbox_converter import process_multiple_singbox_configs
+    converter_module = {
+        "function": process_multiple_singbox_configs, 
+        "template_local_path": "singbox-template.txt", # Template diambil dari file lokal ini
+        "output_mime": "application/json", 
+        "output_language": "json",
+        "output_options": [ # DAFTAR FILE OUTPUT SING-BOX YANG MAU BISA DIPILIH DI GITHUB
+            {"display_name": "Main Config (singbox.txt)", "github_path": "singbox.txt"},
+            # Bisa tambahin opsi lain di sini kalau ada template config lain (misal: singbox_gaming.txt)
+            # {"display_name": "Gaming Config (singbox_gaming.txt)", "github_path": "singbox_gaming.txt"},
+        ]
+    }
+except ImportError as e:
+    st.error(f"❌ Error: Nggak bisa ngeload modul konverter. Pastikan 'singbox_converter.py' ada dan nggak ada error sintaks. Detail: {e}")
+    logger.error(f"Failed to import singbox_converter: {e}", exc_info=True)
+    st.stop() # Hentikan eksekusi aplikasi jika modul penting tidak bisa diimport
+except Exception as e:
+    st.error(f"❌ Error tak terduga saat inisialisasi konverter: {e}")
+    logger.error(f"Unexpected error during converter initialization: {e}", exc_info=True)
+    st.stop()
 
-# --- STREAMLIT APP UTAMA ---
+st.title("VPN Config Converter 🚀")
+st.markdown("Masukkan link VPN lo di bawah, Mek. Bisa VMess, VLESS, atau Trojan.")
+st.markdown("---")
 
-st.set_page_config(page_title="Sing-Box Config Converter & Uploader", page_icon="⚙️", layout="centered")
+uploaded_links = st.text_area(
+    "Paste daftar link VPN di sini (satu link per baris, maksimal 50 link):",
+    height=300,
+    help="Contoh:\nvmess://eyJ2... (VMess link)\ntrojan://passwd@domain.com:443?type=ws&path=%2Fws#MyServer (Trojan link)\nvless://uuid@domain.com:443?type=ws&path=%2Fws&security=tls&sni=domain.com (VLESS link)"
+)
 
-st.title("Sing-Box VPN Config Modifier")
-st.markdown("Masukkan Link VPN (VMess/VLESS/Trojan) untuk memodifikasi konfigurasi Sing-Box dari template.")
+# Pilihan output ke GitHub
+st.subheader("Opsi Output (Pilih Salah Satu)")
+output_to_github = st.checkbox("Upload Hasil ke GitHub?")
 
-# --- Ambil Secrets/Environment Variables ---
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN_VPN_BOT")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
-DEFAULT_TARGET_REPO = os.environ.get("DEFAULT_TARGET_REPO", "") 
-
-# --- Bagian Admin Access ---
-is_admin = False
-if ADMIN_PASSWORD:
-    st.sidebar.header("Admin Access")
-    password_input = st.sidebar.text_input("Enter Admin Password", type="password")
-    if password_input == ADMIN_PASSWORD:
-        is_admin = True
-        st.sidebar.success("Admin access granted!")
-    elif password_input:
-        st.sidebar.error("Incorrect password.")
-else:
-    st.warning("ADMIN_PASSWORD is not set in Streamlit Secrets. GitHub upload features will be disabled.")
-    st.sidebar.info("Untuk mengaktifkan fitur upload, set ADMIN_PASSWORD di Streamlit Secrets.")
-
-# --- Inisialisasi GitHub API ---
-github_client = None
-if GITHUB_TOKEN:
-    try:
-        github_client = Github(GITHUB_TOKEN)
-    except Exception as e:
-        st.sidebar.error(f"Error initializing GitHub client: {e}. Pastikan GITHUB_TOKEN_VPN_BOT valid.")
-        logger.error(f"Error initializing GitHub client: {e}", exc_info=True)
-else:
-    st.warning("GITHUB_TOKEN_VPN_BOT is not set in Streamlit Secrets. GitHub upload feature will be disabled.")
-
-
-# --- Input VPN Link ---
-vpn_link_input = st.text_area("Masukkan Link VPN (VMess/VLESS/Trojan):", height=150)
-
-# Path ke file template, hardcoded karena singbox_converter.py sekarang membacanya dari file
-template_file_path = "singbox-template.txt"
-
-convert_button = st.button("Modifikasi Sing-Box Config")
-
-converted_config_content = ""
-new_outbound_tag_display = ""
-
-if convert_button:
-    if not vpn_link_input:
-        st.error("Link VPN tidak boleh kosong!")
+selected_output_github_path = None
+if output_to_github:
+    st.info("Pilih file di repo GitHub lo yang mau di-update.")
+    output_options_display = {opt["display_name"]: opt["github_path"] for opt in converter_module["output_options"]}
+    
+    if output_options_display:
+        selected_display_name = st.selectbox(
+            "Pilih file config GitHub:",
+            list(output_options_display.keys())
+        )
+        selected_output_github_path = output_options_display[selected_display_name]
     else:
-        try:
-            # Panggil fungsi konversi dari singbox_converter.py
-            # Sekarang hanya perlu vpn_link_input dan path ke template file
-            result = process_singbox_config(vpn_link_input, template_file_path) 
-            
-            if result["status"] == "success":
-                converted_config_content = result["config_content"]
-                new_outbound_tag_display = result.get("new_outbound_tag", "N/A")
-                st.subheader(f"✅ Konfigurasi Sing-Box Berhasil Dimodifikasi!")
-                st.info(f"Outbound baru dengan tag: `{new_outbound_tag_display}` telah ditambahkan dan selektor diperbarui.")
-                st.code(converted_config_content, language="json")
+        st.warning("Tod, belum ada opsi file output GitHub yang diset di kode.")
+        output_to_github = False # Matikan opsi GitHub kalau nggak ada pilihan
 
-                # --- DOWNLOAD BUTTON ---
-                st.download_button(
-                    label="Download Config",
-                    data=converted_config_content,
-                    file_name="singbox_modified_config.json",
-                    mime="application/json"
-                )
+st.markdown("---")
 
-            else:
-                st.error(f"❌ Error Modifikasi: {result['message']}")
-                logger.error(f"Conversion error: {result['message']}")
-        except Exception as e:
-            st.error(f"❌ Terjadi error tak terduga: {e}")
-            logger.error(f"Unexpected error in app.py: {e}", exc_info=True)
-
-
-# --- Bagian Admin untuk Upload GitHub ---
-if is_admin and github_client and converted_config_content:
-    st.markdown("---")
-    st.subheader("Upload Config ke GitHub (Admin Only)")
-
-    target_repo_full_name = st.text_input(
-        "Masukkan Nama Repositori Target (contoh: 'NamaUser/NamaRepo'):",
-        value=DEFAULT_TARGET_REPO
-    )
-
-    # Menghapus pilihan "Path lain..." karena sekarang fokus ke satu template output
-    # Jika lo mau opsi untuk output ke file lain, kita perlu tambahin logikanya di sini
-    selected_github_file_path = st.text_input(
-        "Path file di repositori target (contoh: 'configs/singbox.json'):",
-        value="singbox.json", # Default ke singbox.json
-        help="Ini adalah path file di repositori GitHub lo yang akan diupdate/dibuat."
-    )
-
-    commit_message = st.text_input(
-        "Pesan Commit untuk GitHub:",
-        value=f"Update {selected_github_file_path} via Streamlit app (New Outbound: {new_outbound_tag_display})"
-    )
-
-    upload_github_button = st.button(f"Upload '{selected_github_file_path}' ke GitHub")
-
-    if upload_github_button:
-        if not target_repo_full_name:
-            st.error("Nama repositori target tidak boleh kosong!")
-        elif not selected_github_file_path:
-            st.error("Path file GitHub tidak boleh kosong!")
+if st.button("Konversi Config Sekarang! 🔥"):
+    if not uploaded_links:
+        st.warning("Tod, belum ada link VPN yang dimasukin!")
+    else:
+        # Pisahkan link per baris dan filter yang kosong
+        links_list = [link.strip() for link in uploaded_links.split('\n') if link.strip()]
+        
+        if not links_list:
+            st.warning("Tod, belum ada link VPN yang dimasukin setelah dibersihkan!")
+        elif len(links_list) > 50:
+            st.warning(f"Mek, cuma bisa proses maksimal 50 link sekaligus. Lo masukin {len(links_list)} link. Kurangin dulu ya.")
         else:
+            st.info(f"Oke Tod, siap proses {len(links_list)} link. Sabar bentar ya...")
+            
             try:
-                target_repo = github_client.get_repo(target_repo_full_name)
-                
-                if update_github_file(target_repo, selected_github_file_path, converted_config_content, commit_message):
-                    st.success("Konfigurasi berhasil diupload ke GitHub!")
-                else:
-                    st.error("Gagal mengupload konfigurasi ke GitHub. Cek log atau izin token.")
-            except Exception as e:
-                st.error(f"Error mengakses repositori '{target_repo_full_name}': {e}. Pastikan nama repo benar dan token memiliki izin.")
-                logger.error(f"Error getting target repo '{target_repo_full_name}': {e}", exc_info=True)
+                # Panggil fungsi konversi yang sudah diupdate untuk multiple links
+                result = converter_module["function"](links_list, converter_module["template_local_path"])
 
-elif is_admin and not github_client:
-    st.warning("Admin: GitHub token belum diset atau ada masalah saat inisialisasi. Fitur upload tidak aktif.")
-elif is_admin and not converted_config_content:
-    st.info("Admin: Modifikasi config dulu sebelum bisa mengupload ke GitHub.")
-elif not is_admin:
-    st.info("Login sebagai Admin di sidebar untuk mengupload konfigurasi ke GitHub.")
+                if result["status"] == "success":
+                    new_config_content = result["config_content"]
+                    st.success("🎉 Konversi berhasil, Tod!")
+                    st.code(new_config_content, language=converter_module["output_language"])
+
+                    # Tombol download
+                    st.download_button(
+                        label="⬇️ Download Config Baru (singbox.json)",
+                        data=new_config_content,
+                        file_name="singbox.json",
+                        mime=converter_module["output_mime"]
+                    )
+
+                    if output_to_github and selected_output_github_path:
+                        if not GITHUB_TOKEN or GITHUB_TOKEN == "ISI_TOKEN_GITHUB_LO":
+                            st.error("❌ TOKEN GITHUB BELUM DISET, MEK! Cek `GITHUB_TOKEN_VPN_BOT` di Streamlit Secrets lo atau di `.env` file.")
+                        else:
+                            try:
+                                g = Github(GITHUB_TOKEN)
+                                repo = g.get_user().get_repo(REPO_NAME)
+                                
+                                # Cek apakah file sudah ada
+                                try:
+                                    contents = repo.get_contents(selected_output_github_path, ref=BRANCH_NAME)
+                                    # Jika file ada, update
+                                    repo.update_file(
+                                        contents.path,
+                                        f"Update config Sing-Box dari aplikasi",
+                                        new_config_content,
+                                        contents.sha,
+                                        branch=BRANCH_NAME
+                                    )
+                                    st.success(f"✅ Config berhasil diupdate di GitHub: `{selected_output_github_path}`")
+                                except GithubException as e:
+                                    if e.status == 404:
+                                        # Jika file tidak ada, buat baru
+                                        repo.create_file(
+                                            selected_output_github_path,
+                                            f"Buat config Sing-Box dari aplikasi",
+                                            new_config_content,
+                                            branch=BRANCH_NAME
+                                        )
+                                        st.success(f"✅ Config baru berhasil dibuat di GitHub: `{selected_output_github_path}`")
+                                    else:
+                                        raise # Lempar error ke except di bawah jika bukan 404
+                                
+                                # Tampilkan link ke file di GitHub
+                                st.markdown(f"Lihat hasilnya di GitHub: `{repo.html_url}/blob/{BRANCH_NAME}/{selected_output_github_path}`")
+                                    
+                            except GithubException as e:
+                                st.error(f"❌ Gagal konek ke GitHub API. Cek GITHUB_TOKEN_VPN_BOT lo. Error: {e.data.get('message', str(e))}")
+                                logger.error(f"GitHub connection error: {e.data.get('message', str(e))}", exc_info=True)
+                            except Exception as e:
+                                st.error(f"❌ Terjadi error tak terduga saat mencoba konek ke GitHub: {e}")
+                                logger.error(f"Unexpected GitHub connection error: {e}", exc_info=True)
+
+                elif result["status"] == "warning":
+                    st.warning(result["message"])
+                else: # error
+                    st.error(result["message"])
+                    st.error("Lihat log Termux lo buat detail errornya, Mek!")
+
+            except Exception as e:
+                st.error(f"❌ Terjadi error saat memproses: {e}")
+                logger.error(f"Overall processing error: {e}", exc_info=True)
+
 
 st.markdown("---")
 st.caption("Dibuat dengan 🔥 oleh teman lo.")
+
+# Tambahan untuk Termux
+if __name__ == '__main__':
+    if sys.version_info < (3, 7):
+        st.error("Mek, butuh Python 3.7 atau lebih baru ya buat jalanin bot ini.")
+        sys.exit(1)
+    
+    logger.info("Aplikasi Streamlit berjalan. Akses dari browser lo di http://localhost:8501")
