@@ -357,10 +357,8 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
                     # 2. Bersihkan remaining_name
                     # Hapus karakter non-alphanumeric, spasi, dan beberapa simbol yang aman untuk tag
                     cleaned_remaining_name = re.sub(r'[^\w\s\-\(\)\[\]]+', '', remaining_name) 
-                    # Ganti spasi dengan strip, dan hapus strip ganda
                     cleaned_remaining_name = cleaned_remaining_name.strip().replace(" ", "-").replace("--", "-") 
                     
-                    # Gabungkan emoji dan nama bersih
                     if country_emoji and cleaned_remaining_name:
                         new_outbound_object["tag"] = f"{base_tag} {country_emoji} {cleaned_remaining_name}"
                     elif country_emoji:
@@ -390,7 +388,6 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
         for key in keys_to_remove:
             del new_outbound_object[key]
 
-
         # 2. Muat konfigurasi dasar Sing-Box dari template file
         try:
             # Menggunakan template_file_path yang diterima sebagai argumen
@@ -405,4 +402,100 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
 
         # Pastikan ada bagian "outbounds"
         if "outbounds" not in config_data or not isinstance(config_data["outbounds"], list):
-            r
+            return {"status": "error", "message": "Konfigurasi dasar tidak memiliki array 'outbounds' yang valid."}
+
+        # 3. Tambahkan outbound baru ke daftar outbounds utama
+        # Cek duplikasi tag sebelum menambahkan
+        existing_tags = {out.get("tag") for out in config_data["outbounds"] if isinstance(out, dict) and "tag" in out}
+        if new_outbound_tag in existing_tags:
+            # Jika tag sudah ada, tambahkan suffix angka untuk menghindari konflik
+            suffix = 1
+            original_tag_base = new_outbound_tag
+            # Hapus suffix angka jika sudah ada sebelumnya untuk mencari base tag
+            original_tag_base = re.sub(r'-\d+$', '', original_tag_base) 
+            while f"{original_tag_base}-{suffix}" in existing_tags:
+                suffix += 1
+            new_outbound_tag = f"{original_tag_base}-{suffix}"
+            new_outbound_object["tag"] = new_outbound_tag
+            logger.warning(f"Tag '{original_tag_base}' sudah ada, menggunakan tag baru: '{new_outbound_tag}'")
+        
+        config_data["outbounds"].append(new_outbound_object)
+        logger.info(f"Outbound baru dengan tag '{new_outbound_tag}' berhasil ditambahkan ke daftar utama.")
+
+        # 4. Perbarui outbounds di selektor dan urltest (SESUAI LOGIKA LO YANG SPESIFIK & PENGECUALIAN)
+        updated_ref_count = 0
+        for outbound_item in config_data["outbounds"]:
+            if isinstance(outbound_item, dict) and outbound_item.get("type") in ["selector", "urltest"]:
+                current_selector_tag = outbound_item.get("tag", "Unnamed Selector")
+                
+                # --- Pengecualian: SKIP selektor yang tidak boleh diubah ---
+                if current_selector_tag in TAGS_TO_SKIP:
+                    logger.debug(f"Skipping modification for selector '{current_selector_tag}' as per user's instruction.")
+                    continue # Langsung skip ke item berikutnya
+
+                original_nested_outbounds_list = outbound_item.get("outbounds", [])[:] # Salin list asli
+                
+                final_nested_outbounds = [] # List untuk menyimpan outbounds yang akan di-set
+                
+                # Logika baru: Tambahkan new_outbound_tag ke selector yang spesifik atau yang mengandung 'selector'/'urltest' di tag-nya
+                # Ini mencakup "Internet", "Best Latency", "Lock Region ID" dan juga generic selectors
+                if current_selector_tag in ["Internet", "Best Latency", "Lock Region ID"] or \
+                   "selector" in current_selector_tag.lower() or "urltest" in current_selector_tag.lower():
+                    final_nested_outbounds.append(new_outbound_tag)
+                
+                # Salin outbounds yang sudah ada, kecuali yang sama dengan new_outbound_tag (untuk hindari duplikasi)
+                for existing_tag_in_selector in original_nested_outbounds_list:
+                    if existing_tag_in_selector != new_outbound_tag:
+                        final_nested_outbounds.append(existing_tag_in_selector)
+                
+                # Tambahkan 'direct' ke 'auto-selector' dan 'urltest-selector' jika belum ada
+                # Asumsi 'auto-selector' dan 'urltest-selector' adalah tag-tag yang mungkin ada di template
+                if "auto-selector" in current_selector_tag.lower() or "urltest-selector" in current_selector_tag.lower():
+                    if "direct" not in final_nested_outbounds:
+                        final_nested_outbounds.append("direct")
+
+                # Tambahkan 'proxy' ke 'auto-selector' dan 'urltest-selector' jika belum ada
+                if "auto-selector" in current_selector_tag.lower() or "urltest-selector" in current_selector_tag.lower():
+                    if "proxy" not in final_nested_outbounds:
+                        final_nested_outbounds.append("proxy")
+                
+                # Proses deduplikasi dan pertahankan urutan
+                seen = set()
+                deduplicated_list = []
+                for x in final_nested_outbounds:
+                    if x not in seen:
+                        deduplicated_list.append(x)
+                        seen.add(x)
+                
+                final_nested_outbounds = deduplicated_list
+
+                # Hanya update jika ada perubahan pada list outbounds nested
+                if final_nested_outbounds != original_nested_outbounds_list:
+                    outbound_item["outbounds"] = final_nested_outbounds
+                    updated_ref_count += 1
+                    logger.debug(f"Updated selector '{current_selector_tag}'. New outbounds: {final_nested_outbounds}")
+                else:
+                    logger.debug(f"Selector '{current_selector_tag}' not updated (no changes).")
+            else:
+                logger.debug(f"Skipping non-selector item or malformed selector: {outbound_item.get('tag', 'No Tag')} (Type: {type(outbound_item)})\nContent: {outbound_item}")
+
+
+        logger.info(f"{updated_ref_count} selektor/urltest outbounds berhasil diperbarui referensinya.")
+
+        # 5. Dump objek JSON yang sudah di-update menjadi string JSON
+        new_config_content = json.dumps(config_data, indent=2)
+        
+        return {
+            "status": "success", 
+            "message": "Konfigurasi Sing-Box baru sudah dibuat dan selektor diperbarui.",
+            "config_content": new_config_content, 
+            "new_outbound_tag": new_outbound_tag 
+        }
+
+    except Exception as e:
+        logger.error(f"Error during Sing-Box conversion: {e}", exc_info=True)
+        return {"status": "error", "message": f"Terjadi error yang nggak terduga saat konversi Sing-Box: {e}"}
+
+if __name__ == '__main__':
+    pass # Ini cuma buat debugging lokal singbox_converter.py secara terpisah
+        
