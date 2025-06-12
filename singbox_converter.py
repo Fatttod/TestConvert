@@ -326,9 +326,9 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
                 
                 final_nested_outbounds = [] # List untuk menyimpan outbounds yang akan di-set
                 
-                # Tambahkan new_outbound_tag ke selector "proxy-selector" dan "urltest-selector"
-                # Cek apakah 'proxy-selector' ada dalam current_selector_tag atau 'urltest-selector' ada dalam current_selector_tag
-                if "proxy-selector" in current_selector_tag or "urltest-selector" in current_selector_tag:
+                # Logika baru: Tambahkan new_outbound_tag ke selector yang spesifik atau yang mengandung 'selector'/'urltest' di tag-nya
+                if current_selector_tag in ["Internet", "Best Latency", "Lock Region ID"] or \
+                   "selector" in current_selector_tag.lower() or "urltest" in current_selector_tag.lower():
                     final_nested_outbounds.append(new_outbound_tag)
                 
                 # Salin outbounds yang sudah ada, kecuali yang sama dengan new_outbound_tag (untuk hindari duplikasi)
@@ -337,12 +337,13 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
                         final_nested_outbounds.append(existing_tag_in_selector)
                 
                 # Tambahkan 'direct' ke 'auto-selector' dan 'urltest-selector' jika belum ada
-                if current_selector_tag in ["auto-selector", "urltest-selector"]:
+                # Asumsi 'auto-selector' dan 'urltest-selector' adalah tag-tag yang mungkin ada di template
+                if "auto-selector" in current_selector_tag.lower() or "urltest-selector" in current_selector_tag.lower():
                     if "direct" not in final_nested_outbounds:
                         final_nested_outbounds.append("direct")
 
                 # Tambahkan 'proxy' ke 'auto-selector' dan 'urltest-selector' jika belum ada
-                if current_selector_tag in ["auto-selector", "urltest-selector"]:
+                if "auto-selector" in current_selector_tag.lower() or "urltest-selector" in current_selector_tag.lower():
                     if "proxy" not in final_nested_outbounds:
                         final_nested_outbounds.append("proxy")
                 
