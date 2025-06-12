@@ -223,18 +223,11 @@ def process_singbox_config(vpn_link):
         
         # Cleanup any remaining unused placeholders
         output_config = re.sub(r"__\w+__", "", output_config)
-
-        # Bagian ini dari original singbox_converter.py lo untuk selector/urltest
-        # Ini tidak perlu diubah secara signifikan kecuali jika lo punya selector yang kompleks di template
-        # Misalnya, jika lo ingin menambahkan outbound yang baru dikonversi ke selector yang sudah ada di template
-        # Jika template lo sederhana, bagian ini mungkin tidak terlalu berpengaruh atau bisa dihilangkan
-        # Untuk kasus lo yang cuma timpa sfa.txt/tsel-sfa.txt, mungkin bagian ini tidak begitu krusial
         
-        # Gua pertahankan struktur output yang sama dengan singbox_converter.py lo
         return {
             "status": "success", 
             "message": "Konfigurasi Sing-Box baru sudah dibuat.",
-            "config_content": new_config_content, # Ganti ini dengan new_config_content
+            "config_content": output_config, # BARIS INI YANG DIKOREKSI
         }
 
     except Exception as e:
@@ -252,4 +245,4 @@ if __name__ == '__main__':
     # else:
     #     print(result["message"])
     pass
-    
+      
