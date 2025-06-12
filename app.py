@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 # --- KONFIGURASI GITHUB ---
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN_VPN_BOT") 
-REPO_OWNER = "FATTT" # GANTI ini dengan info repo lo
-REPO_NAME = "convert"      # GANTI ini dengan info repo lo
+REPO_OWNER = "Fatttod" # GANTI ini dengan info repo lo
+REPO_NAME = "toll"      # GANTI ini dengan info repo lo
 BRANCH_NAME = "main"                # Atau "master", tergantung branch default repo lo
 
 # --- Import Fungsi dari Modul Konverter Spesifik ---
@@ -29,8 +29,8 @@ try:
         "output_mime": "application/json", 
         "output_language": "json",
         "output_options": [ # DAFTAR FILE OUTPUT SING-BOX YANG MAU BISA DIPILIH DI GITHUB
-            {"display_name": "Main Config (singbox.txt)", "github_path": "singbox.txt"},
-            {"display_name": "Gaming Config (singbox_gaming.txt)", "github_path": "singbox_gaming.txt"} # Contoh lain
+            {"display_name": "sfa (sfa.txt)", "github_path": "sfa.txt"},
+            {"display_name": "tsel-sfa (jsonconfig.json)", "github_path": "jsonconfig.json"} # Contoh lain
         ]
     }
 except ImportError:
@@ -42,7 +42,7 @@ except Exception as e:
 
 
 # --- JUDUL APLIKASI ---
-st.title("🧰 VPN Config Converter by Mek")
+st.title("🌍 VPN Config Converter")
 st.markdown("---")
 
 # --- PILIH TIPE KONVERSI ---
