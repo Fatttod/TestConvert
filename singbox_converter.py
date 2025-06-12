@@ -1,4 +1,3 @@
-# singbox_converter.py (Revisi Final)
 import json
 import os
 import urllib.parse
@@ -231,18 +230,15 @@ def convert_link_to_singbox_outbound(link_str):
 def process_singbox_config(vmess_links_str, template_content, output_options=None):
     """
     Processes VMess/VLESS/Trojan links and integrates them into a Sing-Box configuration template.
-    It puts converted outbounds first, then 'bypass' and 'dns-out'.
+    It puts converted outbounds based on the user's specified order.
     Excludes certain selector tags from being updated.
     """
     try:
-        # Debugging: Cek template_content yang masuk
         logger.debug(f"Received template_content (first 200 chars): {template_content[:200]}")
         
-        # Parse template JSON
         config_data = json.loads(template_content)
         logger.debug(f"Successfully parsed config_data keys: {config_data.keys()}")
 
-        # Pisahkan link VMess/VLESS/Trojan berdasarkan baris baru
         vmess_links = [link.strip() for link in vmess_links_str.split('\n') if link.strip()]
 
         converted_outbounds = []
@@ -254,111 +250,162 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
                 logger.warning(f"Failed to convert link: {link}")
 
         if not converted_outbounds:
-            # Handle kasus jika tidak ada link valid yang dikonversi
-            # Jika template sudah mengandung outbounds yang cukup, bisa tetap lanjut
-            # Tapi jika tidak ada, ini mungkin error.
-            # Kita bisa kembalikan config_data asli atau tambahkan pesan warning lebih spesifik.
-            # Untuk saat ini, kita akan tambahkan outbounds default jika tidak ada konversi.
             logger.warning("Nggak ada link VPN valid yang dikonversi. Melanjutkan dengan outbounds template dan default.")
 
-
-        # Simpan outbounds 'direct' dan 'dns' dari template jika ada
-        # Lalu hapus dari list utama untuk diatur ulang posisinya
-        default_outbounds = []
-        outbounds_to_keep = []
-        bypass_outbound_found = False
-        dns_out_outbound_found = False
-
-        for outbound in config_data["outbounds"]:
-            if outbound.get("type") == "direct" and outbound.get("tag") == "bypass":
-                default_outbounds.append(outbound)
-                bypass_outbound_found = True
-            elif outbound.get("type") == "dns" and outbound.get("tag") == "dns-out":
-                default_outbounds.append(outbound)
-                dns_out_outbound_found = True
-            else:
-                outbounds_to_keep.append(outbound)
+        # Pisahkan outbounds yang ada di template ke dalam kategori yang berbeda
+        # untuk diatur ulang posisinya sesuai permintaan user.
+        predefined_selectors = [] # Internet, Best Latency, Lock Region ID, WhatsApp, GAMESMAX, Route Port Game, Option ADs, Option P0rn
+        other_template_outbounds = [] # Outbounds lain yang tidak termasuk selector di atas
         
-        # Tambahkan outbound 'bypass' dan 'dns-out' jika belum ada di template
-        # dengan struktur yang sesuai permintaan user
-        if not bypass_outbound_found:
-            default_outbounds.append({
-                "type": "direct",
-                "tag": "bypass"
-            })
-        if not dns_out_outbound_found:
-            default_outbounds.append({
-                "type": "dns",
-                "tag": "dns-out"
-            })
+        # Default fixed outbounds
+        direct_outbound = {"type": "direct", "tag": "direct"}
+        bypass_outbound = {"type": "direct", "tag": "bypass"}
+        block_outbound = {"type": "block", "tag": "block"}
+        dns_out_outbound = {"type": "dns", "tag": "dns-out"}
 
+        # Hapus default outbounds dari template asli agar bisa diatur ulang posisinya
+        # Dan kumpulkan selector yang ingin dipertahankan di posisi awal
+        existing_default_tags = ["direct", "bypass", "block", "dns-out"]
+        
+        for outbound in config_data["outbounds"]:
+            tag = outbound.get("tag")
+            if tag in EXCLUDED_SELECTOR_TAGS or tag in ["Internet", "Best Latency", "Lock Region ID"]:
+                predefined_selectors.append(outbound)
+            elif tag not in existing_default_tags:
+                other_template_outbounds.append(outbound)
 
-        # Gabungkan semua outbounds: yang baru dikonversi + yang dipertahankan + default outbounds
-        # Pastikan outbounds yang dikonversi ada di paling atas
-        # dan default outbounds (bypass, dns-out) di paling bawah
+        # Bangun list outbounds final sesuai urutan yang diminta user
         final_outbounds = []
-        final_outbounds.extend(converted_outbounds) # Akun VPN dikonversi ditaruh paling atas
-        final_outbounds.extend(outbounds_to_keep) # Outbounds lain dari template
-        final_outbounds.extend(default_outbounds) # 'bypass' dan 'dns-out' ditaruh paling bawah
 
+        # 1. Selector/URLTest yang di depan
+        # Prioritaskan selector yang ada di predefined_selectors dari template
+        # dan tambahkan jika ada yang missing dari template
+        
+        # Urutan yang diinginkan: Internet, Best Latency, Lock Region ID, WhatsApp, GAMESMAX, Route Port Game, Option ADs, Option P0rn
+        desired_initial_selector_tags = [
+            "Internet",
+            "Best Latency",
+            "Lock Region ID",
+            "WhatsApp",
+            "GAMESMAX(ML/FF/AOV)",
+            "Route Port Game",
+            "Option ADs",
+            "Option P0rn"
+        ]
+
+        # Map tag ke objek outbound untuk akses cepat
+        temp_outbound_map = {o["tag"]: o for o in config_data["outbounds"] if "tag" in o}
+
+        for tag_name in desired_initial_selector_tags:
+            if tag_name in temp_outbound_map:
+                final_outbounds.append(temp_outbound_map[tag_name])
+            else:
+                # Jika selector tidak ada di template, tambahkan placeholder atau default
+                # Misalnya, Best Latency dan Internet biasanya butuh daftar node VPN
+                if tag_name == "Internet":
+                    final_outbounds.append({
+                        "tag": "Internet",
+                        "type": "selector",
+                        "outbounds": ["Best Latency", "direct"] # Ini akan diupdate nanti
+                    })
+                elif tag_name == "Best Latency":
+                     final_outbounds.append({
+                        "type": "urltest",
+                        "tag": "Best Latency",
+                        "outbounds": [], # Ini akan diisi dengan akun konversi + direct
+                        "url": "https://www.gstatic.com/generate_204",
+                        "interval": "30s"
+                    })
+                elif tag_name == "Lock Region ID":
+                     final_outbounds.append({
+                        "type": "selector",
+                        "tag": "Lock Region ID",
+                        "outbounds": [] # Ini bisa diisi manual atau sesuai rule
+                    })
+                elif tag_name in EXCLUDED_SELECTOR_TAGS:
+                    # Untuk tag yang dikecualikan, pastikan ada placeholder jika tidak di template
+                    final_outbounds.append({
+                        "type": "selector",
+                        "tag": tag_name,
+                        "outbounds": [] # Ini akan dipertahankan atau diisi manual
+                    })
+                logger.warning(f"Selector '{tag_name}' tidak ditemukan di template. Menambahkan placeholder.")
+
+
+        # Tambahkan akun hasil konversi
+        final_outbounds.extend(converted_outbounds)
+
+        # Tambahkan outbounds lain dari template yang tidak termasuk dalam kategori di atas
+        # dan belum ditambahkan
+        for o in other_template_outbounds:
+            if o not in final_outbounds: # Pastikan tidak ada duplikasi
+                final_outbounds.append(o)
+
+        # Tambahkan outbounds default di bagian paling akhir
+        if direct_outbound not in final_outbounds: final_outbounds.append(direct_outbound)
+        if bypass_outbound not in final_outbounds: final_outbounds.append(bypass_outbound)
+        if block_outbound not in final_outbounds: final_outbounds.append(block_outbound)
+        if dns_out_outbound not in final_outbounds: final_outbounds.append(dns_out_outbound)
+        
         config_data["outbounds"] = final_outbounds
 
         # --- UPDATE REFERENSI UNTUK SELECTOR/URLTEST (DENGAN PENGECUALIAN) ---
-        # Kumpulkan semua tag outbound yang baru (termasuk yang dikonversi)
         all_outbound_tags = [o["tag"] for o in final_outbounds if "tag" in o]
-        logger.debug(f"All available outbound tags after conversion: {all_outbound_tags}")
+        logger.debug(f"All available outbound tags after reordering: {all_outbound_tags}")
 
         updated_ref_count = 0
-        for outbound_selector in config_data["outbounds"]:
-            current_selector_tag = outbound_selector.get("tag")
+        for outbound_item in config_data["outbounds"]:
+            current_selector_tag = outbound_item.get("tag")
             
-            # --- Pengecualian di sini! ---
+            # Lewati jika ada di daftar pengecualian
             if current_selector_tag in EXCLUDED_SELECTOR_TAGS:
                 logger.info(f"Melewati selector '{current_selector_tag}' karena ada di daftar pengecualian.")
-                continue # Langsung lanjut ke selector berikutnya
+                continue 
 
-            if (outbound_selector.get("type") == "selector" or \
-                outbound_selector.get("type") == "urltest") and \
-                "outbounds" in outbound_selector and \
-                isinstance(outbound_selector["outbounds"], list):
+            if (outbound_item.get("type") == "selector" or \
+                outbound_item.get("type") == "urltest") and \
+                "outbounds" in outbound_item and \
+                isinstance(outbound_item["outbounds"], list):
                 
-                original_nested_outbounds_list = list(outbound_selector["outbounds"]) # Salin untuk perbandingan
+                original_nested_outbounds_list = list(outbound_item["outbounds"])
                 
-                # Buat daftar outbounds baru untuk selector ini,
-                # prioritaskan yang dikonversi, lalu tambahkan yang default/lainnya dari template
+                # Buat daftar outbounds baru untuk selector ini
                 new_nested_outbounds = []
 
-                # Tambahkan hanya tag yang sudah dikonversi ke selector (jika ada)
-                # Ini mengasumsikan selector ingin menyertakan semua node VPN
-                for converted_outbound in converted_outbounds:
-                    if converted_outbound["tag"] not in new_nested_outbounds:
-                        new_nested_outbounds.append(converted_outbound["tag"])
+                # Prioritaskan akun yang dikonversi
+                for converted_o in converted_outbounds:
+                    if converted_o["tag"] not in new_nested_outbounds:
+                        new_nested_outbounds.append(converted_o["tag"])
+                
+                # Tambahkan 'direct' dan 'bypass' jika belum ada
+                for default_tag in ["direct", "bypass"]:
+                    if default_tag not in new_nested_outbounds and default_tag in all_outbound_tags:
+                        new_nested_outbounds.append(default_tag)
+                
+                # Pertahankan outbounds lain yang relevan dari selector asli
+                # (misalnya, jika 'Internet' ingin 'Best Latency' dan 'direct', atau 'Best Latency' ingin 'direct')
+                for original_tag_in_selector in original_nested_outbounds_list:
+                    if original_tag_in_selector not in new_nested_outbounds and original_tag_in_selector in all_outbound_tags:
+                        new_nested_outbounds.append(original_tag_in_selector)
+                
+                # Tambahkan 'dns-out' jika ini adalah selector yang relevan untuk DNS (misalnya 'Internet' bisa)
+                # Logic ini bisa disesuaikan lebih lanjut jika ada kebutuhan spesifik
+                if current_selector_tag == "Internet" and "dns-out" not in new_nested_outbounds and "dns-out" in all_outbound_tags:
+                    new_nested_outbounds.append("dns-out")
 
-                # Tambahkan tag 'bypass' dan 'dns-out' jika belum ada di selector dan memang ada
-                # Asumsi: selector biasanya mengacu pada node VPN, direct, dan dns-out
-                for default_o in default_outbounds:
-                    if default_o["tag"] not in new_nested_outbounds:
-                        new_nested_outbounds.append(default_o["tag"])
-
-                # Tambahkan outbound lain yang ada di selector asli, kecuali yang sudah ditambahkan
-                for original_tag in original_nested_outbounds_list:
-                    if original_tag not in new_nested_outbounds and original_tag in all_outbound_tags:
-                        new_nested_outbounds.append(original_tag)
-
-                # Hanya update jika ada perubahan pada list outbounds nested
+                # Hanya update jika ada perubahan
                 if new_nested_outbounds != original_nested_outbounds_list:
-                    outbound_selector["outbounds"] = new_nested_outbounds
+                    outbound_item["outbounds"] = new_nested_outbounds
                     updated_ref_count += 1
                     logger.debug(f"Updated selector '{current_selector_tag}'. New outbounds: {new_nested_outbounds}")
                 else:
                     logger.debug(f"Selector '{current_selector_tag}' not updated (no changes).")
             else:
-                logger.debug(f"Skipping non-selector item or malformed selector: {outbound_selector.get('tag', 'No Tag')} (Type: {type(outbound_selector)})\n{outbound_selector}")
+                logger.debug(f"Skipping non-selector item or malformed selector: {outbound_item.get('tag', 'No Tag')} (Type: {type(outbound_item.get('type'))})")
 
 
         logger.info(f"{updated_ref_count} selector/urltest outbounds berhasil diperbarui referensinya.")
 
-        # Dump objek JSON yang sudah di-update menjadi string JSON
         new_config_content = json.dumps(config_data, indent=2)
         
         return {
@@ -373,5 +420,4 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
 
 if __name__ == '__main__':
     print("Mek, file ini adalah modul logika Sing-Box. Jalankan 'app.py' untuk UI-nya ya.")
-
-                           
+        
