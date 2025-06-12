@@ -1,3 +1,4 @@
+# singbox_converter.py (Revisi untuk format TAG yang lebih spesifik)
 import json
 import os
 import urllib.parse
@@ -28,61 +29,89 @@ COUNTRY_CODE_TO_EMOJI = {
 }
 
 # --- FUNGSI HELPER UNTUK MEMBERSIHKAN DAN MEMBENTUK TAG ---
-def _clean_and_tag_name(display_name, base_tag):
+# Fungsi ini sekarang menerima nomor urut juga
+def _clean_and_tag_name(display_name, link_type, server_address, index):
     """
-    Cleans a display name from a VPN link and generates a user-friendly tag.
-    Attempts to extract country code and a cleaned provider/server name.
+    Cleans a display name from a VPN link and generates a user-friendly tag
+    with format: [bendera negara] [Nama ISP/Provider] [Nomor Urut Konversi]
     """
     country_emoji = ""
-    cleaned_provider_name = ""
-    original_display_name = display_name # Keep original for fallback
+    isp_name = ""
+    
+    # 1. Coba deteksi bendera dari display_name atau server_address
+    # Pola untuk mencari kode negara dalam tanda kurung, atau di awal/akhir string
+    country_match = re.search(r'\(?\s*([A-Za-z]{2})\s*\)?', display_name)
+    if not country_match:
+        country_match = re.search(r'([A-Za-z]{2})$', display_name) # Coba di akhir
+    if not country_match:
+        country_match = re.match(r'^\s*([A-Za-z]{2})\s*', display_name) # Coba di awal
 
-    # Strategy 1: Look for (XX) format for country code and then provider name
-    # Example: "my.domain.com-(SG)-DigitalOcean-v2" or "(ID) My VPN"
-    match = re.search(r'\(\s*([A-Za-z]{2})\s*\)\s*(.*)', display_name)
-    if match:
-        code = match.group(1).upper()
+    if country_match:
+        code = country_match.group(1).upper()
         if code in COUNTRY_CODE_TO_EMOJI:
             country_emoji = COUNTRY_CODE_TO_EMOJI[code]
-            remaining_name = match.group(2).strip()
-            # Remove quotes if present
-            if remaining_name.startswith('"') and remaining_name.endswith('"'):
-                remaining_name = remaining_name[1:-1].strip()
-            # Remove common domain-like prefixes
-            cleaned_provider_name = re.sub(r'^(.*?\.com|.*?\.net|.*?\.org|.*?\.io|.*?\.xyz|.*?\.me|.*?\.link|.*?\.cloud|.*?\.fun|.*?\.online|.*?\.icu)-*', '', remaining_name, flags=re.IGNORECASE)
-            cleaned_provider_name = re.sub(r'[^\w\s\-\(\)\[\]]+', '', cleaned_provider_name) # Remove other special chars
-            cleaned_provider_name = cleaned_provider_name.strip().replace(" ", "-").replace("--", "-")
-            
-    # Strategy 2: If strategy 1 failed for emoji, try to extract country code from start, then clean the rest
-    if not country_emoji: 
-        country_code_match = re.match(r'^\s*([A-Za-z]{2})\s*(.*)', display_name)
-        if country_code_match:
-            code = country_code_match.group(1).upper()
-            if code in COUNTRY_CODE_TO_EMOJI:
-                country_emoji = COUNTRY_CODE_TO_EMOJI[code]
-                remaining_name = country_code_match.group(2).strip()
-                cleaned_provider_name = re.sub(r'^(.*?\.com|.*?\.net|.*?\.org|.*?\.io|.*?\.xyz|.*?\.me|.*?\.link|.*?\.cloud|.*?\.fun|.*?\.online|.*?\.icu)-*', '', remaining_name, flags=re.IGNORECASE)
-                cleaned_provider_name = re.sub(r'[^\w\s\-\(\)\[\]]+', '', cleaned_provider_name)
-                cleaned_provider_name = cleaned_provider_name.strip().replace(" ", "-").replace("--", "-")
-
-    # Strategy 3: Clean the whole display name if no specific country code or provider name was found from structured patterns
-    if not country_emoji and not cleaned_provider_name:
-        cleaned_provider_name = re.sub(r'^(.*?\.com|.*?\.net|.*?\.org|.*?\.io|.*?\.xyz|.*?\.me|.*?\.link|.*?\.cloud|.*?\.fun|.*?\.online|.*?\.icu)-*', '', original_display_name, flags=re.IGNORECASE)
-        cleaned_provider_name = re.sub(r'[^\w\s\-\(\)\[\]]+', '', cleaned_provider_name)
-        cleaned_provider_name = cleaned_provider_name.strip().replace(" ", "-").replace("--", "-")
-
-    # Form the final tag
-    final_tag = base_tag
-    if country_emoji and cleaned_provider_name:
-        final_tag = f"{base_tag}-{country_emoji}-{cleaned_provider_name}"
-    elif country_emoji:
-        final_tag = f"{base_tag}-{country_emoji}"
-    elif cleaned_provider_name:
-        final_tag = f"{base_tag}-{cleaned_provider_name}"
+            # Hapus kode negara dari display_name setelah ditemukan
+            display_name = re.sub(r'\(?\s*'+re.escape(country_match.group(0))+r'\s*\)?', '', display_name, flags=re.IGNORECASE).strip()
     
-    # Final cleanup for any double spaces or dashes
-    final_tag = final_tag.replace("  ", " ").strip().replace("--", "-")
-    return final_tag.strip('-') # Remove leading/trailing dashes if any
+    # Fallback: Coba tebak negara dari IP/Domain jika tidak ada di display_name
+    # (Ini butuh library eksternal seperti geoip atau API, jadi untuk saat ini kita biarkan kosong jika tidak ditemukan di display_name)
+    # Misalnya, jika ada API geoip:
+    # if not country_emoji and server_address:
+    #     try:
+    #         country_code_from_ip = get_country_code_from_ip(server_address)
+    #         if country_code_from_ip:
+    #             country_emoji = COUNTRY_CODE_TO_EMOJI.get(country_code_from_ip.upper(), "")
+    #     except Exception as e:
+    #         logger.debug(f"Could not get country from IP {server_address}: {e}")
+
+    # 2. Ekstrak Nama ISP/Provider
+    # Bersihkan display_name dari domain atau kata-kata umum VPN
+    cleaned_name = re.sub(r'^(.*?\.com|.*?\.net|.*?\.org|.*?\.io|.*?\.xyz|.*?\.me|.*?\.link|.*?\.cloud|.*?\.fun|.*?\.online|.*?\.icu|vpn|server|node|proxy|free|vip|premium|test|trial|fast|speed|best|gaming|sgp|id|us|de|fr|nl|gb|ca|au|jp|kr|hk|tw|in|br|ru|ch|se|fi|no|dk|ie|it|es|pt|pl|cz|hu|at|be|gr|il|ae|sa|za|mx|ar|cl|pe|co|ve|my|th|vn|ph|nz|eg|tr|ua|ng|singapore|indonesia|united-states|germany|france|netherlands|united-kingdom|canada|australia|japan|korea|hongkong|taiwan|india|brazil|russia|switzerland|sweden|finland|norway|denmark|ireland|italy|spain|portugal|poland|czech|hungary|austria|belgium|greece|israel|uae|saudi|southafrica|mexico|argentina|chile|peru|colombia|venezuela|malaysia|thailand|vietnam|philippines|newzealand|egypt|turkey|ukraine|nigeria)-*', '', display_name, flags=re.IGNORECASE)
+    cleaned_name = re.sub(r'[^\w\s\-\(\)\[\]]+', '', cleaned_name) # Hapus karakter non-alphanumeric selain spasi, -, (), []
+    cleaned_name = cleaned_name.strip().replace(" ", "-").replace("--", "-")
+    
+    # Fallback ke server_address jika display_name sangat kosong setelah dibersihkan
+    if not cleaned_name:
+        # Coba ekstrak bagian dari domain atau IP
+        match_domain = re.search(r'([a-zA-Z0-9\-]+\.[a-zA-Z0-9\-\.]+)$', server_address)
+        if match_domain:
+            isp_name = match_domain.group(1).split('.')[0] # Ambil bagian pertama dari domain (misal: digitalocean dari digitalocean.com)
+            isp_name = isp_name.replace("-", "").strip()
+        else:
+            isp_name = server_address.replace(".", "-").replace(":", "-").strip() # Jika IP, jadikan IP-sebagai-nama
+    else:
+        isp_name = cleaned_name
+
+    # Jika ISP masih kosong, coba ambil dari server_address (misal: vidio.com dari trojan-quiz.int.vidio.com)
+    if not isp_name and server_address:
+        domain_match = re.search(r'([a-zA-Z0-9\-]+\.[a-zA-Z0-9\-\.]+)$', server_address)
+        if domain_match:
+            isp_name = domain_match.group(1).split('.')[0]
+        else: # If it's an IP
+            isp_name = server_address.replace('.', '-').replace(':', '-')
+    
+    # Default jika semua gagal
+    if not isp_name:
+        isp_name = f"{link_type}-Server"
+
+    # Format nomor urut (selalu 2 digit)
+    index_str = f"{index:02d}"
+
+    # Gabungkan semua
+    final_tag_parts = []
+    if country_emoji:
+        final_tag_parts.append(country_emoji)
+    
+    final_tag_parts.append(isp_name)
+    final_tag_parts.append(index_str)
+
+    final_tag = " ".join(final_tag_parts).strip()
+    
+    # Hapus spasi ganda atau karakter yang nggak perlu
+    final_tag = re.sub(r'\s+', ' ', final_tag).strip()
+    final_tag = re.sub(r'[-_]+', '-', final_tag).strip('-') # Ganti underscore/double dash jadi single dash
+    
+    return final_tag.strip() # Hapus spasi/dash di awal/akhir
 
 
 # --- FUNGSI PARSING LINK VPN (LENGKAP DENGAN VMESS, VLESS, TROJAN) ---
@@ -178,7 +207,7 @@ def parse_trojan_link(trojan_link):
             "address": host,
             "port": int(port),
             "security": query_params.get('security', ['tls'])[0], # Trojan default security is tls
-            "type": query_params.get('type', ['tcp'])[0],
+            "type": query_params.get('type', ['tcp')[0],
             "sni": query_params.get('sni', [''])[0],
             "alpn": query_params.get('alpn', [''])[0],
             "fp": query_params.get('fp', [''])[0], # flow fingerprint
@@ -200,7 +229,8 @@ def parse_trojan_link(trojan_link):
         return None
 
 # --- FUNGSI INTERNAL UNTUK MEMPROSES SATU LINK (TIDAK DIPANGGIL LANGSUNG DARI APP.PY) ---
-def _process_single_singbox_config(vpn_link, existing_tags):
+# Fungsi ini sekarang menerima 'index' untuk penamaan tag
+def _process_single_singbox_config(vpn_link, existing_tags, link_index):
     """
     Parses a single VPN link and returns a Sing-Box outbound object and its generated tag.
     Handles tag deduplication internally.
@@ -208,18 +238,20 @@ def _process_single_singbox_config(vpn_link, existing_tags):
     new_outbound_object = {}
     new_outbound_tag = ""
     protocol_type = None
+    server_address_for_tag = ""
+    display_name_for_tag = ""
 
     try:
         if "vmess://" in vpn_link:
             parsed_data = parse_vmess_link(vpn_link)
             if parsed_data:
                 protocol_type = "vmess"
-                base_tag = f"vmess-{parsed_data.get('add', 'NoName')}"
-                display_name = parsed_data.get('ps', '')
+                server_address_for_tag = parsed_data.get('add', '')
+                display_name_for_tag = parsed_data.get('ps', '')
 
                 new_outbound_object = {
                     "type": "vmess",
-                    "tag": base_tag, # Akan di-update di bawah
+                    "tag": "", # Akan di-update di bawah
                     "server": parsed_data.get('add', ''),
                     "server_port": int(parsed_data.get('port', 443)),
                     "uuid": parsed_data.get('id', ''),
@@ -236,18 +268,19 @@ def _process_single_singbox_config(vpn_link, existing_tags):
                     if parsed_data.get('host'):
                         new_outbound_object["websocket_headers"] = {"Host": parsed_data.get('host', '')}
                 
-                new_outbound_tag = _clean_and_tag_name(display_name, base_tag)
+                # Panggil _clean_and_tag_name dengan parameter lengkap
+                new_outbound_tag = _clean_and_tag_name(display_name_for_tag, protocol_type, server_address_for_tag, link_index)
 
         elif "vless://" in vpn_link:
             parsed_data = parse_vless_link(vpn_link)
             if parsed_data:
                 protocol_type = "vless"
-                base_tag = f"vless-{parsed_data.get('address', 'NoName')}"
-                display_name = parsed_data.get('sni') or parsed_data.get('host') or ""
+                server_address_for_tag = parsed_data.get('address', '')
+                display_name_for_tag = parsed_data.get('sni') or parsed_data.get('host') or parsed_data.get('address') or ""
 
                 new_outbound_object = {
                     "type": "vless",
-                    "tag": base_tag, # Akan di-update di bawah
+                    "tag": "", # Akan di-update di bawah
                     "server": parsed_data.get('address', ''),
                     "server_port": parsed_data.get('port', 443),
                     "uuid": parsed_data.get('uuid', ''),
@@ -270,13 +303,14 @@ def _process_single_singbox_config(vpn_link, existing_tags):
                     if parsed_data.get('host'):
                         new_outbound_object["websocket_headers"] = {"Host": parsed_data.get('host', '')}
                 
-                new_outbound_tag = _clean_and_tag_name(display_name, base_tag)
+                # Panggil _clean_and_tag_name dengan parameter lengkap
+                new_outbound_tag = _clean_and_tag_name(display_name_for_tag, protocol_type, server_address_for_tag, link_index)
 
         elif "trojan://" in vpn_link:
             parsed_data = parse_trojan_link(vpn_link)
             if parsed_data:
                 protocol_type = "trojan"
-                base_tag = f"trojan-{parsed_data.get('address', 'NoName')}"
+                server_address_for_tag = parsed_data.get('address', '')
                 
                 # Ambil path asli dari parsed_data, yang mungkin mengandung #display_name
                 full_path_from_param = parsed_data.get('path', '/')
@@ -290,9 +324,11 @@ def _process_single_singbox_config(vpn_link, existing_tags):
                 else:
                     actual_websocket_path = full_path_from_param
                 
+                display_name_for_tag = display_name_from_path or parsed_data.get('sni') or parsed_data.get('host') or parsed_data.get('address') or ""
+
                 new_outbound_object = {
                     "type": "trojan",
-                    "tag": base_tag, 
+                    "tag": "", 
                     "server": parsed_data.get('address', ''),
                     "server_port": parsed_data.get('port', 443),
                     "password": parsed_data.get('password', ''),
@@ -315,7 +351,9 @@ def _process_single_singbox_config(vpn_link, existing_tags):
                     if parsed_data.get('host'):
                         new_outbound_object["websocket_headers"] = {"Host": parsed_data.get('host', '')}
                 
-                new_outbound_tag = _clean_and_tag_name(display_name_from_path, base_tag)
+                # Panggil _clean_and_tag_name dengan parameter lengkap
+                new_outbound_tag = _clean_and_tag_name(display_name_for_tag, protocol_type, server_address_for_tag, link_index)
+
         else:
             return {"status": "error", "message": "Tipe link VPN tidak didukung. Hanya VMess, VLESS, atau Trojan.", "outbound": None, "tag": None}
         
@@ -331,18 +369,22 @@ def _process_single_singbox_config(vpn_link, existing_tags):
             del new_outbound_object[key]
 
         # Cek duplikasi tag sebelum menambahkan
-        original_tag_base = new_outbound_tag
-        current_tag = original_tag_base
-        suffix = 1
-        while current_tag in existing_tags:
-            current_tag = f"{original_tag_base}-{suffix}"
-            suffix += 1
+        # Kali ini, kita tidak perlu deduplikasi tag dengan suffix -1, -2, dst.
+        # Karena nomor urut sudah memastikan keunikan. Tapi, kita tetap cek
+        # kalau-kalau ada tag persis sama dari proses sebelumnya (misal dari template)
+        # yang belum pakai format baru.
+        final_tag = new_outbound_tag
+        original_final_tag = final_tag
+        suffix_dedup = 1
+        while final_tag in existing_tags:
+            final_tag = f"{original_final_tag}-{suffix_dedup}"
+            suffix_dedup += 1
         
-        if current_tag != original_tag_base:
-            logger.warning(f"Tag '{original_tag_base}' sudah ada, menggunakan tag baru: '{current_tag}'")
-        new_outbound_object["tag"] = current_tag
-        new_outbound_tag = current_tag # Update new_outbound_tag to the deduplicated one
-
+        if final_tag != original_final_tag:
+            logger.warning(f"Generated tag '{original_final_tag}' already exists in final config (likely from template). Using '{final_tag}' instead.")
+        
+        new_outbound_object["tag"] = final_tag # Set tag akhir ke outbound object
+        new_outbound_tag = final_tag # Update new_outbound_tag
 
         return {
             "status": "success", 
@@ -386,10 +428,12 @@ def process_multiple_singbox_configs(vpn_links_list, template_file_path="singbox
         existing_tags_in_final_config = {out.get("tag") for out in config_data["outbounds"] if isinstance(out, dict) and "tag" in out}
         
         processed_outbound_tags = [] # Untuk menyimpan tag dari link yang berhasil diproses
+        processed_outbound_objects = [] # UNTUK MENYIMPAN OBJEK OUTBOUND YANG BERHASIL DIKONVERSI
 
         # 2. Proses setiap link VPN
         for idx, vpn_link in enumerate(vpn_links_list):
-            link_result = _process_single_singbox_config(vpn_link, existing_tags_in_final_config)
+            # Pass index ke fungsi proses single config
+            link_result = _process_single_singbox_config(vpn_link, existing_tags_in_final_config, idx + 1) # idx + 1 untuk nomor urut dari 1
             
             if link_result["status"] == "success" and link_result["outbound"]:
                 new_outbound = link_result["outbound"]
@@ -399,6 +443,7 @@ def process_multiple_singbox_configs(vpn_links_list, template_file_path="singbox
                 config_data["outbounds"].append(new_outbound)
                 existing_tags_in_final_config.add(new_tag) # Tambahkan tag ke set untuk deduplikasi selanjutnya
                 processed_outbound_tags.append(new_tag)
+                processed_outbound_objects.append(new_outbound) # SIMPAN OBJEK OUTBOUND DI SINI
                 logger.info(f"Link {idx+1}: Outbound dengan tag '{new_tag}' berhasil ditambahkan.")
             else:
                 logger.warning(f"Link {idx+1}: Gagal memproses link '{vpn_link[:50]}...': {link_result['message']}")
@@ -466,7 +511,8 @@ def process_multiple_singbox_configs(vpn_links_list, template_file_path="singbox
             "status": "success", 
             "message": f"Konfigurasi Sing-Box baru dengan {len(processed_outbound_tags)} outbound berhasil dibuat dan selektor diperbarui.",
             "config_content": new_config_content, 
-            "new_outbound_tags": processed_outbound_tags # Mengembalikan semua tag yang berhasil ditambahkan
+            "new_outbound_tags": processed_outbound_tags, 
+            "processed_outbound_objects": processed_outbound_objects # MENGEMBALIKAN OBJEK OUTBOUND
         }
 
     except Exception as e:
