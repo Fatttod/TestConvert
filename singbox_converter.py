@@ -27,7 +27,8 @@ COUNTRY_EMOJIS = {
 }
 
 def get_emoji_from_country_code(code):
-    return COUNTRY_EMOJIS.get(code.upper(), "")
+    # Mengembalikan emoji negara atau globe berwarna jika kode tidak ditemukan
+    return COUNTRY_EMOJIS.get(code.upper(), "🌎")
 
 def parse_vmess_link(vmess_link):
     """
@@ -199,6 +200,7 @@ def convert_link_to_singbox_outbound(link_str, node_counter):
     if outbound:
         # Logika pembentukan tag baru: simbol bendera + nama ISP/nama asli + nomor urut
         display_name = original_tag_name
+        country_code = ""
         
         # Coba ekstrak kode negara (misal US, SG, ID) dari awal nama
         match_country = re.match(r'^([A-Za-z]{2})\s*-\s*(.*)', display_name)
@@ -211,8 +213,9 @@ def convert_link_to_singbox_outbound(link_str, node_counter):
         display_name = re.sub(r'\s*\[.*?\]\s*', '', display_name).strip()
 
         # Cek apakah nama display_name sudah cukup informatif, kalau tidak, pakai original_tag_name utuh
+        # Atau jika setelah dibersihkan jadi kosong, pakai nama aslinya
         if not display_name or display_name.lower().startswith(("vmess", "vless", "trojan", "node")):
-            display_name = original_tag_name.replace('_', ' ') # Ganti underscore jadi spasi
+            display_name = original_tag_name.replace('_', ' ').strip() # Ganti underscore jadi spasi
 
         emoji = get_emoji_from_country_code(country_code)
         
@@ -366,9 +369,12 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
                     if current_selector_tag == "Internet":
                         if "Best Latency" in all_outbound_tags and "Best Latency" not in new_nested_outbounds:
                             new_nested_outbounds.insert(0, "Best Latency") # Prioritaskan Best Latency
+                        
+                        # Cek posisi "Lock Region ID" agar tidak di depan Best Latency
                         if "Lock Region ID" in all_outbound_tags and "Lock Region ID" not in new_nested_outbounds:
-                            # Masukkan setelah Best Latency jika ada, atau di awal jika Best Latency tidak ada
-                            insert_index = 1 if "Best Latency" in new_nested_outbounds else 0
+                            insert_index = 0
+                            if "Best Latency" in new_nested_outbounds:
+                                insert_index = new_nested_outbounds.index("Best Latency") + 1
                             new_nested_outbounds.insert(insert_index, "Lock Region ID")
                     
                 else: # Untuk selector lain yang tidak dikecualikan dan bukan di atas
@@ -414,4 +420,4 @@ def process_singbox_config(vmess_links_str, template_content, output_options=Non
 
 if __name__ == '__main__':
     print("Mek, file ini adalah modul logika Sing-Box. Jalankan 'app.py' untuk UI-nya ya.")
-                
+            
