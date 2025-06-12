@@ -109,14 +109,18 @@ def parse_trojan_link(trojan_link):
             "sni": query_params.get('sni', [''])[0],
             "alpn": query_params.get('alpn', [''])[0],
             "fp": query_params.get('fp', [''])[0], # flow fingerprint
-            "flow": query_params.get('flow', [''])[0], # for XTLS
-            "host": query_params.get('host', [''])[0], # For websocket host
-            "path": query_params.get('path', [''])[0]  # For websocket path
+            "flow": query_params.get('flow', [''])[0] # for XTLS
         }
         
-        for key in ["sni", "alpn", "fp", "flow", "host", "path"]:
+        for key in ["sni", "alpn", "fp", "flow"]:
             if config[key] == '':
                 config[key] = None
+
+        # Tambahkan host dan path untuk websocket/http (ini yang perlu diperhatikan khusus)
+        # Note: 'host' di query_params bisa jadi websocket_headers Host
+        # 'path' di query_params bisa jadi websocket_path
+        config['host'] = query_params.get('host', [''])[0] 
+        config['path'] = query_params.get('path', [''])[0]
 
         logger.debug(f"Successfully parsed Trojan link: {host}")
         return config
@@ -203,10 +207,27 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
             parsed_data = parse_trojan_link(vpn_link)
             if parsed_data:
                 protocol_type = "trojan"
+                
+                # Inisialisasi tag dasar
+                base_tag = f"trojan-{parsed_data.get('address', 'NoName')}"
+                
+                # Ambil path asli dari parsed_data
+                full_path_from_param = parsed_data.get('path', '/')
+                actual_websocket_path = "/" # Default jika tidak ada path
+                display_name_from_path = ""
+
+                # Cek apakah path mengandung '#' yang menandakan adanya display name
+                if '#' in full_path_from_param:
+                    path_parts = full_path_from_param.split('#', 1)
+                    actual_websocket_path = path_parts[0]
+                    display_name_from_path = path_parts[1].strip()
+                else:
+                    actual_websocket_path = full_path_from_param # Jika tidak ada '#', seluruhnya adalah path
+
                 # Bentuk outbound object sesuai format Sing-Box dari Trojan
                 new_outbound_object = {
                     "type": "trojan",
-                    "tag": f"trojan-{parsed_data.get('address', 'NoName')}", # Tag bisa disesuaikan
+                    "tag": base_tag, # Akan diperbarui di bawah
                     "server": parsed_data.get('address', ''),
                     "server_port": parsed_data.get('port', 443),
                     "password": parsed_data.get('password', ''),
@@ -215,6 +236,7 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
                     "tls": True, # Trojan selalu TLS
                     "xudp": True, # Asumsi default
                 }
+                
                 if new_outbound_object["tls"]:
                     if parsed_data.get('sni'):
                         new_outbound_object["tls_sni"] = parsed_data.get('sni')
@@ -224,9 +246,20 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
                         new_outbound_object["tls_alpn"] = [parsed_data.get('alpn')]
                 
                 if new_outbound_object["network"] == "ws":
-                    new_outbound_object["websocket_path"] = parsed_data.get('path', '/')
+                    new_outbound_object["websocket_path"] = actual_websocket_path
                     if parsed_data.get('host'):
                         new_outbound_object["websocket_headers"] = {"Host": parsed_data.get('host', '')}
+                
+                # Perbarui tag dengan display_name_from_path jika ada
+                if display_name_from_path:
+                    # Bersihkan display_name_from_path agar cocok untuk tag
+                    cleaned_display_name = re.sub(r'[^\w\s\-\(\)\[\]]+', '', display_name_from_path) # Hapus karakter selain alfanum, spasi, -, (), [], biar tag bersih
+                    cleaned_display_name = cleaned_display_name.strip().replace(" ", "-") # Ganti spasi dengan strip
+                    
+                    if cleaned_display_name: # Pastikan hasilnya tidak kosong
+                        new_outbound_object["tag"] = f"{base_tag}-{cleaned_display_name}"
+                    else:
+                        new_outbound_object["tag"] = base_tag
                 
                 new_outbound_tag = new_outbound_object["tag"]
         else:
@@ -267,6 +300,8 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
             # Jika tag sudah ada, tambahkan suffix angka untuk menghindari konflik
             suffix = 1
             original_tag_base = new_outbound_tag
+            # Hapus suffix angka jika sudah ada sebelumnya untuk mencari base tag
+            original_tag_base = re.sub(r'-\d+$', '', original_tag_base) 
             while f"{original_tag_base}-{suffix}" in existing_tags:
                 suffix += 1
             new_outbound_tag = f"{original_tag_base}-{suffix}"
@@ -292,7 +327,8 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
                 final_nested_outbounds = [] # List untuk menyimpan outbounds yang akan di-set
                 
                 # Tambahkan new_outbound_tag ke selector "proxy-selector" dan "urltest-selector"
-                if "proxy-selector" == current_selector_tag or "urltest-selector" == current_selector_tag:
+                # Cek apakah 'proxy-selector' ada dalam current_selector_tag atau 'urltest-selector' ada dalam current_selector_tag
+                if "proxy-selector" in current_selector_tag or "urltest-selector" in current_selector_tag:
                     final_nested_outbounds.append(new_outbound_tag)
                 
                 # Salin outbounds yang sudah ada, kecuali yang sama dengan new_outbound_tag (untuk hindari duplikasi)
@@ -349,4 +385,4 @@ def process_singbox_config(vpn_link, template_file_path="singbox-template.txt"):
 
 if __name__ == '__main__':
     pass # Ini cuma buat debugging lokal singbox_converter.py secara terpisah
-        
+              
