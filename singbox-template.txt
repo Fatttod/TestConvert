@@ -162,8 +162,8 @@
       "tag": "Internet",
       "type": "selector",
       "outbounds": [
+        "\ud83c\udde8\ud83c\uddf3 (CN) Hurricane Electric LLC",
         "Best Latency",
-        
         "direct"
       ]
     },
@@ -171,7 +171,7 @@
       "type": "urltest",
       "tag": "Best Latency",
       "outbounds": [
-        
+        "\ud83c\udde8\ud83c\uddf3 (CN) Hurricane Electric LLC",
         "direct"
       ],
       "url": "https://www.gstatic.com/generate_204",
@@ -181,7 +181,7 @@
       "type": "selector",
       "tag": "Lock Region ID",
       "outbounds": [
-        
+        "\ud83c\udde8\ud83c\uddf3 (CN) Hurricane Electric LLC"
       ]
     },
     {
@@ -230,8 +230,36 @@
         "Internet"
       ]
     },
-
-    
+    {
+      "domain_strategy": "ipv4_only",
+      "multiplex": {
+        "protocol": "smux",
+        "max_streams": 32
+      },
+      "tag": "\ud83c\udde8\ud83c\uddf3 (CN) Hurricane Electric LLC",
+      "server": "quiz.int.vidio.com",
+      "server_port": 443,
+      "tls": {
+        "enabled": true,
+        "server_name": "quiz.int.vidio.com.admin.ari-andika2.site",
+        "insecure": true,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "randomized"
+        }
+      },
+      "transport": {
+        "type": "ws",
+        "path": "/192.3.113.4-19318",
+        "headers": {
+          "Host": "quiz.int.vidio.com.admin.ari-andika2.site"
+        },
+        "early_data_header_name": "Sec-WebSocket-Protocol"
+      },
+      "type": "vless",
+      "uuid": "9d34f62f-44b9-4d20-8796-e9c4dc90ac27",
+      "network": "ws"
+    },
     {
       "type": "direct",
       "tag": "direct"
